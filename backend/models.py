@@ -316,27 +316,51 @@ def generate_image_lora(
 
 if _ML_AVAILABLE:
     class _DecoderStub(torch.nn.Module):
-        """Minimal decoder matching v4 AstroGen VAE-GAN architecture.
-        Trained with: latent_dim=512, img_size=512, base_ch=64, 5 upsampling blocks.
-        """
-        def __init__(self, latent_dim=512, base_ch=64, img_size=512):
+        """Custom trained VAE-GAN generator architecture with ResBlocks."""
+        class _ResBlock(torch.nn.Module):
+            def __init__(self, channels):
+                super().__init__()
+                self.block = torch.nn.Sequential(
+                    torch.nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+                    torch.nn.BatchNorm2d(channels),
+                    torch.nn.ReLU(True),
+                    torch.nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+                    torch.nn.BatchNorm2d(channels)
+                )
+
+            def forward(self, x):
+                return x + self.block(x)
+
+        def __init__(self, latent_dim=512):
             super().__init__()
-            self.init_size = img_size // 32  # 512//32 = 16
-            self.base_ch   = base_ch
-            self.fc = torch.nn.Linear(latent_dim, base_ch*8 * self.init_size ** 2)
-            layers = []
-            ch_list = [base_ch*8, base_ch*8, base_ch*4, base_ch*4, base_ch*2, base_ch*2, base_ch, 3]
-            strides = [2, 2, 2, 2, 2]
-            for i in range(len(strides)):
-                layers += [
-                    torch.nn.BatchNorm2d(ch_list[i]),
-                    torch.nn.ConvTranspose2d(ch_list[i], ch_list[i+1], 4, strides[i], 1),
-                    torch.nn.ReLU(True) if i < len(strides)-1 else torch.nn.Tanh()
-                ]
-            self.net = torch.nn.Sequential(*layers)
+            self.fc = torch.nn.Linear(latent_dim, 512 * 8 * 8)
+            
+            self.net = torch.nn.Sequential(
+                torch.nn.BatchNorm2d(512),                            # 0
+                torch.nn.ConvTranspose2d(512, 512, 4, 2, 1),          # 1
+                torch.nn.BatchNorm2d(512),                            # 2
+                torch.nn.ReLU(True),                                  # 3
+                torch.nn.ConvTranspose2d(512, 512, 4, 2, 1),          # 4
+                torch.nn.BatchNorm2d(512),                            # 5
+                torch.nn.ReLU(True),                                  # 6
+                self._ResBlock(512),                                  # 7
+                torch.nn.ConvTranspose2d(512, 256, 4, 2, 1),          # 8
+                torch.nn.BatchNorm2d(256),                            # 9
+                torch.nn.ReLU(True),                                  # 10
+                self._ResBlock(256),                                  # 11
+                torch.nn.ConvTranspose2d(256, 128, 4, 2, 1),          # 12
+                torch.nn.BatchNorm2d(128),                            # 13
+                torch.nn.ReLU(True),                                  # 14
+                self._ResBlock(128),                                  # 15
+                torch.nn.ConvTranspose2d(128, 64, 4, 2, 1),           # 16
+                torch.nn.BatchNorm2d(64),                             # 17
+                torch.nn.ReLU(True),                                  # 18
+                torch.nn.ConvTranspose2d(64, 3, 4, 2, 1),             # 19
+                torch.nn.Tanh()                                       # 20
+            )
 
         def forward(self, z):
-            h = self.fc(z).view(-1, self.base_ch*8, self.init_size, self.init_size)
+            h = self.fc(z).view(-1, 512, 8, 8)
             return self.net(h)
 
 
@@ -350,7 +374,7 @@ def _load_gan_decoder():
         return _gan_decoder
 
     print("[Models] Loading VAE-GAN decoder (latent_dim=512, img_size=512)...")
-    decoder = _DecoderStub(latent_dim=512, base_ch=64, img_size=512).to(DEVICE)
+    decoder = _DecoderStub(latent_dim=512).to(DEVICE)
 
     if os.path.exists(GAN_GEN_PATH):
         state = torch.load(GAN_GEN_PATH, map_location=DEVICE)
