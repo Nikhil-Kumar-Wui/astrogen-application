@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual env
+.venv/
+
+# Environment
+.env
+
+# Logs
+backend_log.txt
+vite_log.txt
+*.log
+
+# Models (too large for git)
+models/lora/*.safetensors
+models/vae_gan/*.pt
+models/blip2/
+
+# Data
+data/generated/
+data/*.db
+*.db
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temp
+1
+test_backend_err.txt
