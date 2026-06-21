@@ -393,6 +393,41 @@ def generate_image_gan(seed: int = None) -> bytes:
     Generate random astronomical image using VAE-GAN decoder.
     Returns PNG bytes.
     """
+    # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
+    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
+    _is_gpu_server = (_backend == "cuda")
+
+    if not _is_gpu_server:
+        azure_url = os.getenv("AZURE_API_URL")
+        if azure_url:
+            azure_url = azure_url.strip("'\"")
+            print(f"[Models] AZURE_API_URL detected. Delegating GAN generation to remote GPU: {azure_url}...")
+            try:
+                import requests
+                api_url = f"{azure_url.rstrip('/')}/generate"
+                payload = {
+                    "prompt": "",
+                    "model": "vae_gan",
+                    "session_id": None,
+                    "seed": seed
+                }
+                response = requests.post(api_url, json=payload, timeout=120)
+                if response.status_code == 200:
+                    data = response.json()
+                    img_b64 = data.get("image_b64")
+                    if img_b64:
+                        print("[Models] Successfully generated GAN image via remote GPU!")
+                        import base64
+                        return base64.b64decode(img_b64)
+                    else:
+                        print(f"[Models] Remote GAN response missing image_b64: {data}")
+                else:
+                    print(f"[Models] Remote GAN returned status {response.status_code}: {response.text}")
+                    print("[Models] Falling back to local GAN...")
+            except Exception as e:
+                print(f"[Models] Error calling remote GPU for GAN: {e}")
+                print("[Models] Falling back to local GAN...")
+
     decoder = _load_gan_decoder()
 
     if seed is not None:
@@ -504,6 +539,41 @@ def caption_image(img_bytes: bytes, question: str = None) -> str:
         question:  If None, generate free caption. If str, do VQA.
     Returns: Generated text
     """
+    # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
+    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
+    _is_gpu_server = (_backend == "cuda")
+
+    if not _is_gpu_server:
+        azure_url = os.getenv("AZURE_API_URL")
+        if azure_url:
+            azure_url = azure_url.strip("'\"")
+            print(f"[Models] AZURE_API_URL detected. Delegating captioning to remote GPU: {azure_url}...")
+            try:
+                import requests
+                import base64
+                api_url = f"{azure_url.rstrip('/')}/caption"
+                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                payload = {
+                    "image_b64": img_b64,
+                    "question": question,
+                    "session_id": None
+                }
+                response = requests.post(api_url, json=payload, timeout=120)
+                if response.status_code == 200:
+                    data = response.json()
+                    caption = data.get("caption")
+                    if caption:
+                        print("[Models] Successfully captioned image via remote GPU!")
+                        return caption
+                    else:
+                        print(f"[Models] Remote captioning response missing caption: {data}")
+                else:
+                    print(f"[Models] Remote captioning returned status {response.status_code}: {response.text}")
+                    print("[Models] Falling back to local captioning...")
+            except Exception as e:
+                print(f"[Models] Error calling remote GPU for captioning: {e}")
+                print("[Models] Falling back to local captioning...")
+
     model, processor = _load_blip2()
     img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
