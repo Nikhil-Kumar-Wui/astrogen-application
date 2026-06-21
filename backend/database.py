@@ -115,6 +115,20 @@ def init_db():
         )
     """)
 
+    # Google user profiles table (ONLY on scale production cloud PostgreSQL database)
+    if is_pg:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id          SERIAL PRIMARY KEY,
+                email       VARCHAR(255) UNIQUE NOT NULL,
+                name        VARCHAR(255) NOT NULL,
+                picture     TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                opt_in      BOOLEAN DEFAULT FALSE,
+                purpose     VARCHAR(255)
+            )
+        """)
+
     conn.commit()
     conn.close()
     print(f"[DB] Initialized database (PostgreSQL={is_pg})")
@@ -266,6 +280,27 @@ def image_to_base64(filepath: str) -> str:
         return ''
     with open(filepath, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
+
+
+def save_user_profile(email: str, name: str, picture: str, opt_in: bool = False, purpose: str = None):
+    """Save user registration metadata directly to PostgreSQL cloud database for secure data collection."""
+    if not is_postgresql():
+        print("[DB] Local SQLite mode active. Skipping cloud profile collection.")
+        return
+    conn = get_conn()
+    try:
+        execute_query(conn, """
+            INSERT INTO users (email, name, picture, opt_in, purpose)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (email) DO UPDATE 
+            SET name = EXCLUDED.name, picture = EXCLUDED.picture, opt_in = EXCLUDED.opt_in, purpose = EXCLUDED.purpose
+        """, (email, name, picture, opt_in, purpose))
+        conn.commit()
+        print(f"[DB] Successfully saved user profile to PostgreSQL: {email}")
+    except Exception as e:
+        print(f"[DB] Error saving user profile to PostgreSQL: {e}")
+    finally:
+        conn.close()
 
 
 # Initialize on import

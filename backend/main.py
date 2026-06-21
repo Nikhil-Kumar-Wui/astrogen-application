@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from database import (
     create_session, get_all_sessions, rename_session, delete_session,
     add_message, get_session_messages, get_session_context,
-    save_generated_image, get_all_generated_images, image_to_base64
+    save_generated_image, get_all_generated_images, image_to_base64,
+    save_user_profile
 )
 from models import (
     generate_image_lora, generate_image_gan, caption_image,
@@ -468,6 +469,9 @@ def auth_callback(code: str):
         state["user_email"] = user_email
         state["user_picture"] = user_picture
         _write_state(state)
+        
+        # Save profile to Supabase PostgreSQL database if configured
+        save_user_profile(user_email, user_name, user_picture, opt_in=True)
         
         # Send transactional welcome email
         send_onboarding_email(user_email, user_name)
