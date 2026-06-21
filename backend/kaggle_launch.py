@@ -58,62 +58,57 @@ subprocess.run(
 )
 print("[AstroGen] Libraries installed.")
 
-# 4. Download AstroGen models from HuggingFace
-print("[AstroGen] Downloading models from HuggingFace...")
+# 4. Mount AstroGen models from Kaggle Input dataset
+print("[AstroGen] Exposing models from Kaggle input dataset...")
 try:
-    from huggingface_hub import hf_hub_download, snapshot_download
-    HF_REPO = "nik-nikhil-wui/AstroGen-Models"
-    HF_TOKEN = "{hf_token}"
+    import shutil
+    INPUT_DIR = "/kaggle/input/astrogen-models-private"
     MODELS_DIR = "/kaggle/working/models"
-    os.makedirs(MODELS_DIR, exist_ok=True)
-
-    # 4a. Full merged SD pipeline (unet, vae, tokenizer, text_encoder, scheduler, feature_extractor)
-    print("[AstroGen] Downloading astrogen_merged SD pipeline...")
-    snapshot_download(
-        repo_id=HF_REPO,
-        allow_patterns=["astrogen_merged/**"],
-        local_dir=MODELS_DIR,
-        token=HF_TOKEN,
-    )
-    print("[AstroGen] astrogen_merged downloaded.")
-
-    # 4b. Final LoRA weights
-    print("[AstroGen] Downloading LoRA weights...")
-    os.makedirs(f"{{MODELS_DIR}}/lora", exist_ok=True)
-    hf_hub_download(
-        repo_id=HF_REPO,
-        filename="lora/astrogen_lora.safetensors",
-        local_dir=MODELS_DIR,
-        token=HF_TOKEN,
-    )
-    print("[AstroGen] LoRA weights downloaded.")
-
-    # 4c. BLIP2 finetuned adapter
-    print("[AstroGen] Downloading BLIP2 adapter...")
-    snapshot_download(
-        repo_id=HF_REPO,
-        allow_patterns=["blip2/blip2_finetuned/**"],
-        local_dir=MODELS_DIR,
-        token=HF_TOKEN,
-    )
-    print("[AstroGen] BLIP2 adapter downloaded.")
-
-    # 4d. VAE-GAN encoder + generator
-    print("[AstroGen] Downloading VAE-GAN weights...")
-    os.makedirs(f"{{MODELS_DIR}}/vae_gan", exist_ok=True)
-    for fname in ["encoder.pt", "generator.pt"]:
-        hf_hub_download(
-            repo_id=HF_REPO,
-            filename=f"vae_gan/{{fname}}",
-            local_dir=MODELS_DIR,
-            token=HF_TOKEN,
-        )
-    print("[AstroGen] VAE-GAN weights downloaded.")
-
-    print("[AstroGen] All models ready.")
+    
+    # Check candidates for dataset mount
+    candidates = [
+        "/kaggle/input/astrogen-models-private",
+        "/kaggle/input/astrogen-models-private/models",
+        "/kaggle/input/astrogen-models-private-dataset",
+    ]
+    
+    found_dir = None
+    for c in candidates:
+        if os.path.exists(c):
+            found_dir = c
+            break
+            
+    if not found_dir:
+        # Scan /kaggle/input/ dynamically
+        if os.path.exists("/kaggle/input"):
+            for folder in os.listdir("/kaggle/input"):
+                p = os.path.join("/kaggle/input", folder)
+                if os.path.isdir(p):
+                    found_dir = p
+                    break
+                    
+    if found_dir:
+        print(f"[AstroGen] Found mounted dataset at: {{found_dir}}")
+        if os.path.exists(MODELS_DIR) or os.path.islink(MODELS_DIR):
+            if os.path.islink(MODELS_DIR):
+                os.unlink(MODELS_DIR)
+            else:
+                shutil.rmtree(MODELS_DIR)
+                
+        # Symlink the models folder for instant, zero-copy load
+        if os.path.exists(os.path.join(found_dir, "astrogen_merged")):
+            os.symlink(found_dir, MODELS_DIR)
+        elif os.path.exists(os.path.join(found_dir, "models", "astrogen_merged")):
+            os.symlink(os.path.join(found_dir, "models"), MODELS_DIR)
+        else:
+            os.symlink(found_dir, MODELS_DIR)
+            
+        print("[AstroGen] Symlinked models successfully from dataset mount.")
+    else:
+        print("[AstroGen] WARNING: No mounted dataset found under /kaggle/input.")
 except Exception as e:
-    print(f"[AstroGen] WARNING: Model download failed: {{e}}")
-    print("[AstroGen] Continuing - backend will attempt local model load.")
+    print(f"[AstroGen] WARNING: Failed to mount dataset: {{e}}")
+
 
 # 5. Launch backend process
 log_file = open("/kaggle/working/backend_log.txt", "w")
@@ -252,7 +247,7 @@ def launch_kaggle_server(username, key, gemini_key=""):
             "enable_tpu": False,
             "enable_internet": True,
             "machine_shape": "NvidiaTeslaT4",
-            "dataset_sources": [],
+            "dataset_sources": ["nikhilkumarwui/astrogen-models-private"],
             "kernel_sources": [],
             "competition_sources": []
         }
