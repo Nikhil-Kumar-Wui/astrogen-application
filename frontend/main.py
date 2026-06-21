@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QProgressBar, QTextEdit, QFrame
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtGui import QIcon, QColor, QPalette, QFont, QLinearGradient, QPainter, QBrush, QPen
+from PyQt6.QtGui import QIcon, QColor, QPalette, QFont, QLinearGradient, QPainter, QBrush, QPen, QDesktopServices
 from PyQt6.QtCore import QRect, QPoint
 import ctypes
 
@@ -27,6 +27,11 @@ FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR     = os.path.dirname(FRONTEND_DIR)
 PORT         = 5173
 HOST         = "127.0.0.1"
+
+# ── Windows console window suppression ───────────────────────────────────────
+SUBPROCESS_KWARGS = {}
+if os.name == "nt":
+    SUBPROCESS_KWARGS["creationflags"] = 0x08000000 # CREATE_NO_WINDOW
 URL          = f"http://{HOST}:{PORT}"
 
 # ── Windows taskbar grouping ──────────────────────────────────────────────────
@@ -95,6 +100,23 @@ _state = get_app_state()
 _state["launch_count"] = _state.get("launch_count", 0) + 1
 set_app_state(_state)
 
+def kill_port(port: int):
+    """Find and kill any process listening on the specified local port."""
+    try:
+        if os.name == 'nt':
+            out = subprocess.check_output("netstat -ano", shell=True, text=True, **SUBPROCESS_KWARGS)
+            for line in out.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **SUBPROCESS_KWARGS)
+        else:
+            subprocess.run(f"lsof -t -i:{port} | xargs kill -9", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DependencyInstaller — background thread
@@ -135,7 +157,7 @@ class DependencyInstaller(QThread):
                 out = subprocess.check_output(
                     ["powershell", "-Command",
                      "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-                    text=True, timeout=5
+                    text=True, timeout=5, **SUBPROCESS_KWARGS
                 )
             else:
                 out = subprocess.check_output("lspci | grep -i vga", shell=True, text=True, timeout=5)
@@ -148,7 +170,7 @@ class DependencyInstaller(QThread):
     def _check_imports(self, python_exe):
         """Return True if all required packages are importable."""
         check_script = f"import {', '.join(PACKAGES_TO_CHECK)}"
-        res = subprocess.run([python_exe, "-c", check_script], capture_output=True)
+        res = subprocess.run([python_exe, "-c", check_script], capture_output=True, **SUBPROCESS_KWARGS)
         return res.returncode == 0
 
     def _pip(self, python_exe, args, label, start_pct, end_pct):
@@ -157,7 +179,8 @@ class DependencyInstaller(QThread):
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=0, shell=(os.name == 'nt')
+            bufsize=0, shell=(os.name == 'nt'),
+            **SUBPROCESS_KWARGS
         )
         pct_range = end_pct - start_pct
         buffer = []
@@ -200,10 +223,16 @@ class DependencyInstaller(QThread):
             python_exe = os.path.join(venv_dir, "Scripts", "python.exe") if os.name == "nt" \
                          else os.path.join(venv_dir, "bin", "python")
             backend_set = get_env_var("ASTROGEN_BACKEND")
-            if backend_set and os.path.exists(venv_dir):
-                self.progress.emit("Workspace ready — fast boot!", 100)
-                self.finished.emit()
-                return
+            if backend_set and os.path.exists(python_exe):
+                # Quick smoke check that key packages are importable
+                smoke = subprocess.run(
+                    [python_exe, "-c", "import torch, fastapi, PyQt6"],
+                    capture_output=True, timeout=10, **SUBPROCESS_KWARGS
+                ).returncode == 0
+                if smoke:
+                    self.progress.emit("Workspace ready — fast boot!", 100)
+                    self.finished.emit()
+                    return
 
             # ── Step 1: GPU detection (0→10%) ────────────────────────────
             self.progress.emit(STEP_MESSAGES[0], 5)
@@ -219,14 +248,14 @@ class DependencyInstaller(QThread):
             self.progress.emit(STEP_MESSAGES[1], 12)
             if not os.path.exists(venv_dir):
                 self.progress.emit("Creating Python virtual environment...", 13)
-                subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True, capture_output=True)
+                subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True, capture_output=True, **SUBPROCESS_KWARGS)
             self.progress.emit("Python environment ready", 18)
             time.sleep(0.3)
 
             # ── Step 3: Upgrade pip (20→25%) ─────────────────────────────
             self.progress.emit(STEP_MESSAGES[2], 20)
             subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pip", "-q"],
-                           capture_output=True)
+                           capture_output=True, **SUBPROCESS_KWARGS)
             self.progress.emit("Package manager updated", 25)
 
             # ── Step 4: Check if all packages already installed ───────────
@@ -239,7 +268,7 @@ class DependencyInstaller(QThread):
                 if gpu == "nvidia":
                     cuda_ok = subprocess.run(
                         [python_exe, "-c", "import torch; assert torch.cuda.is_available()"],
-                        capture_output=True
+                        capture_output=True, **SUBPROCESS_KWARGS
                     ).returncode == 0
                     set_env_var("ASTROGEN_BACKEND", "cuda" if cuda_ok else "cpu")
                 else:
@@ -276,7 +305,7 @@ class DependencyInstaller(QThread):
                 if gpu == "nvidia":
                     cuda_ok = subprocess.run(
                         [python_exe, "-c", "import torch; assert torch.cuda.is_available()"],
-                        capture_output=True
+                        capture_output=True, **SUBPROCESS_KWARGS
                     ).returncode == 0
                     set_env_var("ASTROGEN_BACKEND", "cuda" if cuda_ok else "cpu")
                 else:
@@ -505,6 +534,27 @@ class LoadingWidget(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Custom Web Page — intercept external links & window.open to system browser
+# ══════════════════════════════════════════════════════════════════════════════
+
+from PyQt6.QtWebEngineCore import QWebEnginePage
+
+class CustomWebPage(QWebEnginePage):
+    def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        # Intercept external HTTP/HTTPS URLs and open them in the system's default browser
+        if url.isValid() and url.scheme() in ("http", "https"):
+            if url.host() not in ("localhost", "127.0.0.1"):
+                QDesktopServices.openUrl(url)
+                return False
+        return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+
+    def createWindow(self, window_type):
+        # Return self to redirect the new window load to this page, which is then
+        # intercepted by acceptNavigationRequest and opened in the default browser.
+        return self
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MainWindow
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -529,6 +579,14 @@ class MainWindow(QMainWindow):
 
         # Web view (hidden until Vite is ready)
         self._web = QWebEngineView()
+        self._page = CustomWebPage(self._web)
+        self._web.setPage(self._page)
+
+        from PyQt6.QtWebEngineCore import QWebEngineSettings
+        settings = self._web.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
 
         # Vite readiness timer
         self._timer = QTimer(self)
@@ -546,6 +604,8 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self):
         self._loading.update_progress("Launching AstroGen servers...", 100)
+        kill_port(8001)
+        kill_port(5173)
         self._start_backend()
         self._vite_proc = start_vite()
         self._timer.start(500)
@@ -565,12 +625,13 @@ class MainWindow(QMainWindow):
             cwd=ROOT_DIR,
             stdout=open(log_file, "a"),
             stderr=subprocess.STDOUT,
-            shell=(os.name == "nt")
+            shell=(os.name == "nt"),
+            **SUBPROCESS_KWARGS
         )
         def _kill():
             try:
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **SUBPROCESS_KWARGS)
             except Exception:
                 proc.terminate()
         atexit.register(_kill)
@@ -592,22 +653,29 @@ class MainWindow(QMainWindow):
 
 # ── Vite process launcher ─────────────────────────────────────────────────────
 def start_vite():
+    """Launch the Vite dev server from the astrogen frontend subdirectory.
+    Requires PORT and BASE_PATH env vars as enforced by vite.config.ts.
+    """
+    astrogen_dir = os.path.join(
+        FRONTEND_DIR, "artifacts", "astrogen"
+    )
     env = os.environ.copy()
-    env["PORT"] = str(PORT)
-    env["BASE_PATH"] = "/"
+    env["PORT"]      = str(PORT)        # Required by vite.config.ts
+    env["BASE_PATH"] = "/"              # Required by vite.config.ts
     log_file = os.path.join(ROOT_DIR, "vite_log.txt")
     proc = subprocess.Popen(
-        ["npx", "-y", "pnpm", "--filter", "@workspace/astrogen", "run", "dev"],
-        cwd=FRONTEND_DIR,
+        ["npm", "run", "dev"],
+        cwd=astrogen_dir,               # Must be the astrogen folder
         env=env,
         shell=True,
         stdout=open(log_file, "a"),
         stderr=subprocess.STDOUT,
+        **SUBPROCESS_KWARGS
     )
     def _kill():
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **SUBPROCESS_KWARGS)
         except Exception:
             proc.terminate()
     atexit.register(_kill)

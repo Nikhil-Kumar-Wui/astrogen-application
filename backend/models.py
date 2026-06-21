@@ -244,71 +244,48 @@ def generate_image_lora(
     Generate astronomical image from text prompt using LoRA fine-tuned SD.
     Returns PNG bytes.
     """
-    # Check for Azure API URL for fast cloud GPU generation
-    azure_url = os.getenv("AZURE_API_URL")
-    if azure_url:
-        azure_url = azure_url.strip("'\"")
-        print(f"[Models] AZURE_API_URL detected. Delegating generation to Azure: {azure_url}...")
-        try:
-            import requests
-            api_url = f"{azure_url.rstrip('/')}/generate"
-            payload = {
-                "prompt": prompt,
-                "model": "lora_sd",
-                "session_id": None,
-                "num_steps": num_steps,
-                "guidance_scale": guidance_scale,
-                "width": width,
-                "height": height,
-                "seed": seed
-            }
-            response = requests.post(api_url, json=payload, timeout=60)
-            if response.status_code == 200:
-                data = response.json()
-                img_b64 = data.get("image_b64")
-                if img_b64:
-                    print("[Models] Successfully generated image via Azure API!")
-                    import base64
-                    return base64.b64decode(img_b64)
-                else:
-                    print(f"[Models] Azure API response missing image_b64: {data}")
-            else:
-                print(f"[Models] Azure API returned status {response.status_code}: {response.text}")
-                print("[Models] Falling back to next generation option...")
-        except Exception as e:
-            print(f"[Models] Error calling Azure API: {e}")
-            print("[Models] Falling back to next generation option...")
+    # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
+    # On Kaggle: ASTROGEN_BACKEND=cuda → skip these and use local fine-tuned model directly.
+    # On desktop CPU: ASTROGEN_BACKEND=cpu → delegate to Kaggle GPU tunnel or HF API.
+    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
+    _is_gpu_server = (_backend == "cuda")
 
-    # Check for Hugging Face Inference API Token for fast cloud GPU generation
-    hf_token = os.getenv("HF_API_TOKEN")
-    if hf_token:
-        hf_token = hf_token.strip("'\"")
-        print("[Models] HF_API_TOKEN detected. Using Hugging Face Serverless Inference API...")
-        try:
-            import requests
-            api_url = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-            headers = {"Authorization": f"Bearer {hf_token}"}
-            enriched = enrich_prompt(prompt)
-            payload = {
-                "inputs": enriched,
-                "parameters": {
-                    "negative_prompt": negative_prompt,
-                    "num_inference_steps": min(num_steps, 50),
+    if not _is_gpu_server:
+        # Check for Kaggle tunnel URL → forward request to remote GPU
+        azure_url = os.getenv("AZURE_API_URL")
+        if azure_url:
+            azure_url = azure_url.strip("'\"")
+            print(f"[Models] AZURE_API_URL detected. Delegating generation to remote GPU: {azure_url}...")
+            try:
+                import requests
+                api_url = f"{azure_url.rstrip('/')}/generate"
+                payload = {
+                    "prompt": prompt,
+                    "model": "lora_sd",
+                    "session_id": None,
+                    "num_steps": num_steps,
                     "guidance_scale": guidance_scale,
                     "width": width,
                     "height": height,
+                    "seed": seed
                 }
-            }
-            response = requests.post(api_url, headers=headers, json=payload, timeout=45)
-            if response.status_code == 200:
-                print("[Models] Successfully generated image via Hugging Face API!")
-                return response.content
-            else:
-                print(f"[Models] Hugging Face API returned status {response.status_code}: {response.text}")
+                response = requests.post(api_url, json=payload, timeout=120)
+                if response.status_code == 200:
+                    data = response.json()
+                    img_b64 = data.get("image_b64")
+                    if img_b64:
+                        print("[Models] Successfully generated image via remote GPU!")
+                        import base64
+                        return base64.b64decode(img_b64)
+                    else:
+                        print(f"[Models] Remote GPU response missing image_b64: {data}")
+                else:
+                    print(f"[Models] Remote GPU returned status {response.status_code}: {response.text}")
+                    print("[Models] Falling back to local generation...")
+            except Exception as e:
+                print(f"[Models] Error calling remote GPU: {e}")
                 print("[Models] Falling back to local generation...")
-        except Exception as e:
-            print(f"[Models] Error calling Hugging Face API: {e}")
-            print("[Models] Falling back to local generation...")
+
 
     pipeline = _load_lora_pipeline()
     enriched = enrich_prompt(prompt)

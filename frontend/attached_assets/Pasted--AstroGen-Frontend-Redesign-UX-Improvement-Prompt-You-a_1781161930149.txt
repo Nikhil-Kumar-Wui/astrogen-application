@@ -1,0 +1,562 @@
+# AstroGen Frontend Redesign & UX Improvement Prompt
+
+You are a senior Frontend Engineer, UI/UX Designer, and Product Designer.
+
+Your task is to completely upgrade the frontend experience of the AstroGen application while preserving ALL existing backend functionality, API calls, business logic, model integrations, database interactions, routes, environment variables, and image generation workflows.
+
+IMPORTANT:
+
+* DO NOT modify backend logic.
+* DO NOT modify API contracts.
+* DO NOT change model inference code.
+* DO NOT change image generation pipeline.
+* DO NOT change authentication logic.
+* DO NOT change database logic.
+* Only improve frontend structure, styling, responsiveness, accessibility, navigation, loading states, and user experience.
+
+---
+
+## DESIGN DIRECTION
+
+Current UI feels:
+
+* Generic AI project
+* Basic cards
+* Emoji-heavy
+* Student-project appearance
+* Low visual hierarchy
+* Minimal branding
+
+Target appearance:
+
+Blend of:
+
+* NASA Mission Control
+* SpaceX Dashboard
+* Modern SaaS Product
+* Apple-level polish
+* Linear.app cleanliness
+* Vercel aesthetics
+* Premium dark mode
+
+Keywords:
+
+* Futuristic
+* Elegant
+* Professional
+* Scientific
+* Space-tech
+* Premium
+* Creative
+* Modern
+* Clean
+
+Avoid:
+
+* Random emojis
+* Cartoon styles
+* Generic AI website look
+* Cheap gradients
+* Overly bright colors
+
+---
+
+## COLOR SYSTEM
+
+Create a premium space-inspired theme:
+
+Primary:
+
+* Deep Space Black
+* Cosmic Navy
+* Midnight Blue
+
+Accent:
+
+* Electric Cyan
+* Nebula Purple
+* Starlight White
+
+Use:
+
+* Glassmorphism where appropriate
+* Soft glow effects
+* Subtle animated backgrounds
+* Space particles
+* Professional shadows
+
+No flashy rainbow effects.
+
+---
+
+## NAVIGATION IMPROVEMENTS
+
+### 1. Fix AstroGen Logo Navigation
+
+Current issue:
+When user enters chat page there is no easy way to return to homepage.
+
+Required:
+
+* Clicking AstroGen logo/title must always navigate to Home Page.
+* Works from every route.
+* Add hover animation.
+* Add cursor pointer.
+
+---
+
+### 2. Global Navigation
+
+Create a professional navbar.
+
+Navbar should include:
+
+* AstroGen Logo
+* Home
+* Generate
+* Analyze
+* About (optional)
+
+Right side:
+
+* Theme toggle
+* Settings
+* User menu (if exists)
+
+Navbar remains consistent across pages.
+
+---
+
+## HOMEPAGE REDESIGN
+
+Current homepage cards are boring.
+
+Redesign entire hero section.
+
+### Hero Section
+
+Include:
+
+Large heading:
+"Explore the Universe with AI"
+
+Subheading:
+Generate, analyze, and understand space imagery using advanced AI systems.
+
+CTA Buttons:
+
+* Generate Image
+* Analyze Image
+
+Add:
+
+* Space-themed visual
+* Animated stars
+* Floating particles
+* Subtle motion
+
+---
+
+### Feature Cards
+
+Replace current basic blocks.
+
+Create premium feature cards with:
+
+* Professional icons
+* Hover animations
+* Glass effect
+* Better spacing
+* Better typography
+
+Examples:
+
+Image Generation
+Generate astrophotography, galaxies, nebulae, planets, and cosmic scenes.
+
+Image Analysis
+Understand celestial objects with AI-powered analysis.
+
+Prompt Enhancement
+Transform ideas into detailed astronomical prompts.
+
+Fast Processing
+Optimized AI workflows.
+
+Cards should:
+
+* Lift on hover
+* Glow subtly
+* Have depth
+
+---
+
+## CHAT PAGE IMPROVEMENTS
+
+Current chat page feels basic.
+
+Upgrade to premium AI workspace.
+
+### Layout
+
+Create:
+
+* Left sidebar
+* Main chat area
+* Better message containers
+
+Improve:
+
+* Message spacing
+* Readability
+* Typography
+* Input section
+
+---
+
+### Chat Bubbles
+
+User messages:
+
+* Clean modern styling
+
+Assistant messages:
+
+* Distinct appearance
+* Better formatting
+* Rich markdown rendering
+
+Add:
+
+* Smooth animations
+* Fade-in transitions
+
+---
+
+## FIX NON-WORKING BUTTONS
+
+Audit entire frontend and ensure all buttons function properly.
+
+Specifically verify:
+
+* Download Image
+* Copy Prompt
+* Copy Response
+* Regenerate
+* Share
+* Retry
+
+Requirements:
+
+Download Image:
+
+* Properly downloads generated image.
+
+Copy Prompt:
+
+* Copies exact prompt to clipboard.
+* Show success toast.
+
+Copy Response:
+
+* Copies generated content.
+* Show success toast.
+
+Retry:
+
+* Re-submit previous request.
+
+All buttons must provide user feedback.
+
+---
+
+## TOAST NOTIFICATIONS
+
+Add modern notification system.
+
+Examples:
+
+✓ Prompt copied
+
+✓ Image downloaded
+
+✓ Generation started
+
+✓ Generation completed
+
+✕ Error occurred
+
+Use:
+
+* Non-intrusive
+* Smooth animations
+
+---
+
+## LOADING EXPERIENCE
+
+Current issue:
+No proper waiting experience.
+
+Required:
+Implement premium loading system.
+
+---
+
+### Generation Loading Screen
+
+When image generation starts:
+
+Show:
+
+* Progress panel
+* Animated space visualization
+* Status text
+
+Examples:
+
+Initializing AI Model...
+
+Preparing Prompt...
+
+Generating Cosmic Scene...
+
+Rendering Final Image...
+
+Finalizing Output...
+
+---
+
+### Estimated Time Display
+
+Show estimated completion time.
+
+Example:
+
+Estimated Time:
+~15 seconds remaining
+
+Update dynamically if possible.
+
+---
+
+### Progress Bar
+
+Create:
+
+* Animated progress bar
+* Smooth transitions
+* Percentage indicator
+
+Example:
+
+63% Complete
+
+---
+
+## LOFI SPACE LOADING EXPERIENCE
+
+Create a beautiful waiting experience.
+
+While generating:
+
+Display:
+
+* Animated astronaut
+* Floating satellite
+* Orbiting planets
+* Cosmic particles
+
+Style:
+Lo-fi + futuristic.
+
+Not childish.
+
+Should feel:
+"Mission Control is processing your request."
+
+Include rotating messages:
+
+"Scanning the cosmos..."
+
+"Mapping star systems..."
+
+"Analyzing celestial patterns..."
+
+"Rendering deep-space imagery..."
+
+---
+
+## IMAGE RESULT EXPERIENCE
+
+After generation:
+
+Animate image appearance.
+
+Use:
+
+* Fade in
+* Scale transition
+
+Actions panel:
+
+* Download
+* Copy Prompt
+* Generate Similar
+* Full Screen
+* Compare
+
+Professional button design.
+
+---
+
+## IMAGE ANALYSIS PAGE
+
+Improve layout significantly.
+
+Current output likely appears as plain text.
+
+Required:
+
+Create sections:
+
+* Summary
+* Detected Objects
+* Scientific Insights
+* Technical Details
+* Confidence Scores
+
+Use cards and visual hierarchy.
+
+---
+
+## RESPONSIVENESS
+
+Optimize for:
+
+* Laptop
+* Desktop
+* Large screens
+
+Primary target:
+Laptop users.
+
+Ensure:
+
+* Proper spacing
+* Better content width
+* No oversized elements
+
+---
+
+## MICRO INTERACTIONS
+
+Add subtle animations:
+
+Buttons:
+
+* Hover scale
+* Glow
+
+Cards:
+
+* Lift effect
+
+Images:
+
+* Smooth appearance
+
+Navigation:
+
+* Underline animation
+
+Loading:
+
+* Smooth transitions
+
+Keep animations professional.
+
+---
+
+## TYPOGRAPHY
+
+Use premium fonts.
+
+Suggested:
+
+* Inter
+* Space Grotesk
+* Sora
+
+Create clear hierarchy:
+
+* Hero titles
+* Section titles
+* Content
+* Labels
+
+Improve readability dramatically.
+
+---
+
+## EMPTY STATES
+
+Create professional empty states.
+
+Before image generation:
+
+Show:
+
+* Example prompts
+* Suggested space ideas
+
+Examples:
+
+"Black hole near a dying star"
+
+"Ultra realistic Andromeda galaxy"
+
+"NASA telescope view of a nebula"
+
+---
+
+## ACCESSIBILITY
+
+Ensure:
+
+* Keyboard navigation
+* Proper contrast
+* ARIA labels
+* Focus states
+
+---
+
+## PERFORMANCE
+
+Optimize frontend:
+
+* Lazy loading
+* Smooth rendering
+* Reduce unnecessary re-renders
+
+Do not alter backend behavior.
+
+---
+
+## FINAL REQUIREMENT
+
+The finished application should feel like:
+
+A production-grade AI platform built by NASA, SpaceX, and Vercel engineers.
+
+It should look:
+
+* Premium
+* Futuristic
+* Scientific
+* Trustworthy
+* Creative
+
+while preserving 100% of existing backend functionality and application logic.
+
+Focus entirely on frontend quality, user experience, navigation, visual design, responsiveness, animations, loading states, and usability improvements.

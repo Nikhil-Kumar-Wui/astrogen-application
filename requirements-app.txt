@@ -1,0 +1,23 @@
+# AstroGen App — Core Requirements (installs in ~2 min)
+# These are needed just to RUN the app UI.
+# ML model packages (torch, diffusers etc.) are optional —
+# the app opens without them, models just won't generate until installed.
+
+# Backend
+fastapi==0.111.0
+uvicorn==0.29.0
+python-multipart==0.0.9
+python-dotenv==1.0.1
+pydantic==2.7.1
+
+# Frontend
+PyQt6>=6.7.0
+PyQt6-WebEngine>=6.7.0
+requests>=2.31.0
+
+# Gemini API (optional — for QA chat feature)
+google-generativeai>=0.5.0
+
+# Utilities
+Pillow>=10.3.0
+numpy>=1.26.0

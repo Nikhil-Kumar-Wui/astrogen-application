@@ -1,0 +1,295 @@
+# AstroGen Home Page Enhancement Prompt
+
+Redesign the AstroGen home page so it feels like a real scientific software product, not a student AI project.
+
+The home page should immediately explain what AstroGen is, why it exists, how it works, and what makes it different. Users should understand the project within 10 seconds of opening the application.
+
+## Design Direction
+
+Create a premium desktop application experience inspired by:
+
+* Deep space observatories
+* NASA mission dashboards
+* Scientific visualization software
+* Apple dark-mode design language
+* Modern research platforms
+
+Avoid:
+
+* Generic AI assistant appearance
+* Emoji-heavy sections
+* Basic feature cards
+* Empty hero sections
+* Marketing buzzwords
+* "Coming Soon" labels
+
+The application should feel like a completed research product.
+
+---
+
+# Hero Section
+
+Large title:
+
+ASTROGEN
+
+Subtitle:
+
+Astronomical Generative Intelligence Platform
+
+Description:
+
+AstroGen is an advanced research-driven platform for astronomical image generation, analysis, and interpretation. The system combines multiple deep learning architectures trained specifically on space imagery collected from NASA APOD archives and curated astronomical datasets.
+
+CTA buttons:
+
+* Begin Session
+* Explore Architecture
+
+The hero section should contain a beautiful animated space background with:
+
+* Visible stars
+* Nebula clouds
+* Galaxies
+* Subtle cosmic dust
+* Occasional shooting stars
+* Soft animated movement
+
+Make it feel alive.
+
+---
+
+# Project Overview Section
+
+Create a section explaining:
+
+"What is AstroGen?"
+
+Content:
+
+AstroGen was developed to explore the application of modern generative artificial intelligence in astronomy.
+
+The platform enables:
+
+* Text-to-space image generation
+* Astronomical image interpretation
+* Domain-specific prompt enhancement
+* Scientific visual content creation
+* Research-oriented image synthesis
+
+The explanation should be presented in a visually attractive timeline or card layout.
+
+---
+
+# Research Architecture Section
+
+Display the complete project pipeline visually.
+
+Dataset
+↓
+LoRA Fine-Tuned Stable Diffusion
+↓
+VAE-GAN Architecture
+↓
+BLIP2 Captioning Model
+↓
+Evaluation Framework
+↓
+Desktop Application
+
+Each stage should have a short explanation.
+
+Example:
+
+Dataset Collection
+Curated astronomical images collected from NASA APOD archives and processed for domain-specific training.
+
+LoRA Stable Diffusion
+Fine-tuned Stable Diffusion model adapted specifically for astronomical image generation.
+
+VAE-GAN
+Custom generative architecture enhanced with Perceptual Astronomy Loss for improved structural realism.
+
+BLIP2
+Image understanding and caption generation model trained on astronomical imagery.
+
+Evaluation Framework
+Quantitative assessment using CLIP Score, FID, Inception Score, BLEU, and visual comparison studies.
+
+Desktop Platform
+Integrated AI workspace for generation, analysis, and interaction.
+
+---
+
+# Research Contributions Section
+
+Create a premium section titled:
+
+Research Innovations
+
+Show the project's unique contributions:
+
+1. Semantic Prompt Conditioning
+
+Astronomy-aware prompt enrichment system that improves generation quality by injecting domain knowledge into prompts.
+
+2. Multi-Resolution Consistency
+
+Generation consistency across multiple spatial scales to preserve celestial structures.
+
+3. Perceptual Astronomy Loss
+
+Custom loss function combining:
+
+* VGG Features
+* Sobel Edge Features
+* Frequency Domain Analysis
+* SSIM
+* LPIPS
+
+to improve astronomical realism.
+
+Use professional cards with subtle animations.
+
+---
+
+# Model Performance Section
+
+Display animated statistics.
+
+Use count-up animations.
+
+Example values:
+
+Training Images
+6984+
+
+Astronomical Categories
+9
+
+Deep Learning Models
+3
+
+Generated Samples
+10000+
+
+Research Modules
+5
+
+Desktop Platform
+1
+
+Do NOT show fake accuracy percentages.
+
+Instead show project scale and architecture metrics.
+
+---
+
+# Astronomy Categories Section
+
+Show all supported categories visually:
+
+* Galaxy
+* Nebula
+* Planet
+* Moon
+* Star
+* Sun
+* Comet
+* Aurora
+* Deep Space Objects
+
+Each category should have a small icon or image.
+
+Hovering should reveal a short explanation.
+
+---
+
+# Generated Results Showcase
+
+Create an image carousel.
+
+Show generated examples.
+
+Display:
+
+Prompt
+Model Used
+Generation Time
+
+Smooth transitions.
+
+Professional presentation.
+
+---
+
+# Why AstroGen Section
+
+Explain what makes the platform unique.
+
+Points:
+
+* Trained on astronomical imagery
+* Research-driven architecture
+* Multiple generative approaches
+* Integrated image understanding
+* Local desktop deployment
+* Scientific evaluation pipeline
+
+Present this as a modern comparison layout.
+
+---
+
+# Project Statistics Dashboard
+
+Create a futuristic dashboard.
+
+Show:
+
+Dataset Size
+Training Progress
+Model Count
+Research Components
+Generated Images
+Storage Usage
+
+Use animated visual indicators.
+
+Do not show meaningless percentages.
+
+---
+
+# Footer Section
+
+Include:
+
+ASTROGEN
+
+Astronomical Generative Intelligence Platform
+
+Research-focused AI system for astronomical image generation and analysis.
+
+Display:
+
+Version
+Model Status
+Dataset Status
+
+Use subtle professional styling.
+
+---
+
+# Important Requirements
+
+* AstroGen title must appear on a single line.
+* Add a custom space-themed logo instead of Python icons.
+* Make the home page informative and educational.
+* Users should understand the project without opening documentation.
+* Use animations carefully and professionally.
+* Keep the entire design elegant and premium.
+* Maintain a black/charcoal space-inspired color palette.
+* No bright blue AI-style themes.
+* No generic chatbot appearance.
+* Make AstroGen feel like a real scientific software product developed by a professional research team.
+
+The home page should become a complete presentation of the project, not merely a navigation screen.

@@ -14,12 +14,15 @@ __pycache__/
 # Logs
 backend_log.txt
 vite_log.txt
+backend_err.txt
+kernel_logs_latest.txt
+test_backend_err.txt
 *.log
 
+
 # Models (too large for git)
-models/lora/*.safetensors
-models/vae_gan/*.pt
-models/blip2/
+models/
+
 
 # Data
 data/generated/

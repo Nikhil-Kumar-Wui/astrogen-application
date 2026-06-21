@@ -354,13 +354,18 @@ def get_settings():
     env = _read_env()
     state = _read_state()
     key = env.get("GEMINI_API_KEY", "")
+    kaggle_connected = state.get("kaggle_connected", False)
+    # When Kaggle is connected, inference runs on the remote GPU regardless of local env
+    effective_backend = "cuda" if kaggle_connected else env.get("ASTROGEN_BACKEND", "cpu")
     return {
         "gemini_api_key": key[:8] + "..." + key[-4:] if len(key) > 14 else ("set" if key else ""),
         "gemini_api_key_set": bool(key),
-        "backend": env.get("ASTROGEN_BACKEND", "cpu"),
-        "kaggle_connected": state.get("kaggle_connected", False),
+        "backend": effective_backend,
+        "kaggle_connected": kaggle_connected,
         "kaggle_url": state.get("kaggle_url", ""),
         "launch_count": state.get("launch_count", 0),
+        "kaggle_username": env.get("KAGGLE_USERNAME", ""),
+        "kaggle_key_set": bool(env.get("KAGGLE_KEY", "")),
     }
 
 
@@ -377,10 +382,83 @@ def update_settings(req: SettingsUpdate):
     return {"ok": True, "updated": list(updates.keys())}
 
 
-# ── Kaggle GPU URL management ────────────────────────────────────────────────
+# ── Kaggle GPU URL & Auto-Launch management ──────────────────────────────────
 
 class KaggleUrlRequest(BaseModel):
     url: str
+
+class KaggleLaunchRequest(BaseModel):
+    username: str
+    key: str
+
+
+@app.post("/kaggle/launch")
+def launch_kaggle(req: KaggleLaunchRequest):
+    """
+    Launch the Kaggle GPU server.
+    Saves username and key to .env.
+    Pushes launcher script to Kaggle.
+    Returns session_token.
+    """
+    try:
+        # Save credentials to .env
+        _write_env({
+            "KAGGLE_USERNAME": req.username.strip(),
+            "KAGGLE_KEY": req.key.strip()
+        })
+        
+        # Read Gemini API key to bake into the launcher
+        env = _read_env()
+        gemini_key = env.get("GEMINI_API_KEY", "")
+        
+        import importlib
+        import kaggle_launch
+        importlib.reload(kaggle_launch)
+        token = kaggle_launch.launch_kaggle_server(
+            username=req.username.strip(),
+            key=req.key.strip(),
+            gemini_key=gemini_key
+        )
+        return {"ok": True, "session_token": token}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kaggle/poll")
+def poll_kaggle(token: str, username: Optional[str] = None, key: Optional[str] = None):
+    """
+    Poll key-value store for the Kaggle server URL.
+    Also checks status of the Kaggle kernel if URL isn't ready.
+    """
+    import kaggle_launch
+    url = kaggle_launch.get_kaggle_url(token)
+    if url:
+        # Auto-connect and save it!
+        _write_env({"AZURE_API_URL": url})
+        state = _read_state()
+        state["kaggle_url"] = url
+        state["kaggle_connected"] = True
+        _write_state(state)
+        return {"status": "success", "url": url}
+        
+    # Check remote status if credentials are provided or in env
+    status = "unknown"
+    if username and key:
+        status = kaggle_launch.check_kernel_status(username, key)
+    else:
+        env = _read_env()
+        u = env.get("KAGGLE_USERNAME", "")
+        k = env.get("KAGGLE_KEY", "")
+        if u and k:
+            status = kaggle_launch.check_kernel_status(u, k)
+            
+    status_lower = status.lower()
+    if "error" in status_lower or status_lower in ("complete", "stopped", "hasfailed", "cancel_requested", "cancel_acknowledged"):
+        return {"status": "failed", "detail": f"Kaggle kernel status: {status}"}
+        
+    return {"status": "waiting", "detail": f"Server status: {status}"}
 
 
 @app.get("/kaggle/status")
@@ -393,14 +471,17 @@ def kaggle_status():
     if not url:
         return {"connected": False, "url": "", "reachable": False}
 
-    # Quick connectivity test
+    # Quick connectivity test — remote Kaggle backend exposes /status not /health
     reachable = False
-    try:
-        import requests as _req
-        resp = _req.get(f"{url.rstrip('/')}/health", timeout=5)
-        reachable = (resp.status_code == 200)
-    except Exception:
-        pass
+    for endpoint in ["/status", "/health"]:
+        try:
+            import requests as _req
+            resp = _req.get(f"{url.rstrip('/')}{endpoint}", timeout=8)
+            if resp.status_code == 200:
+                reachable = True
+                break
+        except Exception:
+            continue
 
     return {"connected": True, "url": url, "reachable": reachable}
 

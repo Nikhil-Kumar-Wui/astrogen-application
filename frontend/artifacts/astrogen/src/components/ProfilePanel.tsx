@@ -50,9 +50,11 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
       const res = await fetch(`${API}/settings`);
       const data = await res.json();
       setSettings(data);
-      // Also check kaggle reachability
+      // Check kaggle reachability whenever settings load
       if (data.kaggle_connected) {
         checkKaggle();
+      } else {
+        setKaggleReachable(null);
       }
     } catch {
       setSettings(null);
@@ -68,6 +70,13 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
       setKaggleReachable(false);
     }
   };
+
+  // Re-check reachability every 15s while panel is open and connected
+  useEffect(() => {
+    if (!settings?.kaggle_connected) return;
+    const interval = setInterval(checkKaggle, 15000);
+    return () => clearInterval(interval);
+  }, [settings?.kaggle_connected]);
 
   const handleSaveKey = async () => {
     if (!geminiKey.trim()) return;
@@ -286,7 +295,11 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
             <div className="grid grid-cols-2 gap-2">
               {[
                 { label: "Sessions", value: settings.launch_count, icon: <Zap size={12} /> },
-                { label: "Backend", value: settings.backend?.toUpperCase(), icon: settings.backend === "cuda" ? <Zap size={12} /> : <Cpu size={12} /> },
+                {
+                  label: "Backend",
+                  value: settings.kaggle_connected ? "Kaggle GPU" : settings.backend?.toUpperCase(),
+                  icon: settings.kaggle_connected ? <Zap size={12} style={{ color: "#20BEFF" }} /> : <Cpu size={12} />,
+                },
               ].map(stat => (
                 <div key={stat.label} className="rounded-xl p-3 flex flex-col gap-1" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div className="flex items-center gap-1.5" style={{ color: "#475569" }}>

@@ -1,0 +1,413 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 1.0.0
+  description: AstroGen API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: sessions
+    description: Chat session management
+  - name: generation
+    description: Image generation and AI operations
+  - name: gallery
+    description: Generated image gallery
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /status:
+    get:
+      operationId: getStatus
+      tags: [health]
+      summary: Get system status
+      description: Returns model availability and system info
+      responses:
+        "200":
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatus"
+
+  /sessions:
+    get:
+      operationId: getSessions
+      tags: [sessions]
+      summary: List all sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+    post:
+      operationId: createSession
+      tags: [sessions]
+      summary: Create a new session
+      parameters:
+        - name: title
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "New Chat"
+      responses:
+        "200":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionCreated"
+
+  /sessions/{sessionId}:
+    put:
+      operationId: renameSession
+      tags: [sessions]
+      summary: Rename a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionRenameInput"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+    delete:
+      operationId: deleteSession
+      tags: [sessions]
+      summary: Delete a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /sessions/{sessionId}/messages:
+    get:
+      operationId: getSessionMessages
+      tags: [sessions]
+      summary: Get messages for a session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+
+  /generate:
+    post:
+      operationId: generateImage
+      tags: [generation]
+      summary: Generate an astronomical image
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateInput"
+      responses:
+        "200":
+          description: Generation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateResult"
+
+  /chat:
+    post:
+      operationId: sendChat
+      tags: [generation]
+      summary: Send a chat message to Gemini
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatInput"
+      responses:
+        "200":
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResult"
+
+  /caption:
+    post:
+      operationId: captionImage
+      tags: [generation]
+      summary: Caption an image with BLIP-2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaptionInput"
+      responses:
+        "200":
+          description: Caption result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptionResult"
+
+  /gallery:
+    get:
+      operationId: getGallery
+      tags: [gallery]
+      summary: Get generated image gallery
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 60
+      responses:
+        "200":
+          description: Gallery images
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GalleryImage"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    SystemStatus:
+      type: object
+      properties:
+        models:
+          type: object
+          additionalProperties: true
+        gemini:
+          type: boolean
+        db_sessions:
+          type: integer
+      required:
+        - models
+        - gemini
+        - db_sessions
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        created_at:
+          type: ["string", "null"]
+      required:
+        - id
+        - title
+
+    SessionCreated:
+      type: object
+      properties:
+        session_id:
+          type: integer
+        title:
+          type: string
+      required:
+        - session_id
+        - title
+
+    SessionRenameInput:
+      type: object
+      properties:
+        title:
+          type: string
+      required:
+        - title
+
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: ["integer", "string"]
+        role:
+          type: string
+        content:
+          type: string
+        msg_type:
+          type: string
+        model_used:
+          type: ["string", "null"]
+        prompt:
+          type: ["string", "null"]
+        timestamp:
+          type: ["string", "null"]
+      required:
+        - id
+        - role
+        - content
+        - msg_type
+
+    GenerateInput:
+      type: object
+      properties:
+        prompt:
+          type: string
+        model:
+          type: string
+          default: "lora_sd"
+        session_id:
+          type: ["integer", "null"]
+        num_steps:
+          type: integer
+          default: 30
+        guidance_scale:
+          type: number
+          default: 7.5
+        seed:
+          type: ["integer", "null"]
+        width:
+          type: integer
+          default: 512
+        height:
+          type: integer
+          default: 512
+      required:
+        - prompt
+
+    GenerateResult:
+      type: object
+      properties:
+        status:
+          type: string
+        image_path:
+          type: ["string", "null"]
+        prompt:
+          type: ["string", "null"]
+        model:
+          type: ["string", "null"]
+      required:
+        - status
+
+    ChatInput:
+      type: object
+      properties:
+        message:
+          type: string
+        session_id:
+          type: integer
+        image_b64:
+          type: ["string", "null"]
+      required:
+        - message
+        - session_id
+
+    ChatResult:
+      type: object
+      properties:
+        status:
+          type: string
+        response:
+          type: ["string", "null"]
+      required:
+        - status
+
+    CaptionInput:
+      type: object
+      properties:
+        image_b64:
+          type: string
+        question:
+          type: ["string", "null"]
+        session_id:
+          type: ["integer", "null"]
+      required:
+        - image_b64
+
+    CaptionResult:
+      type: object
+      properties:
+        status:
+          type: string
+        caption:
+          type: ["string", "null"]
+      required:
+        - status
+
+    GalleryImage:
+      type: object
+      properties:
+        id:
+          type: ["integer", "null"]
+        filepath:
+          type: string
+        prompt:
+          type: ["string", "null"]
+        model:
+          type: ["string", "null"]
+        thumbnail_b64:
+          type: ["string", "null"]
+        created_at:
+          type: ["string", "null"]
+      required:
+        - filepath

@@ -150,16 +150,33 @@ export default function HomePage() {
   const [showProfile, setShowProfile] = useState(false);
   const [showKaggle, setShowKaggle] = useState(false);
 
-  // Auto-show Kaggle popup on very first launch
+  // Auto-show Kaggle popup on first and every 5th launch if not connected
   useEffect(() => {
-    fetch("http://localhost:8001/settings")
-      .then(r => r.json())
-      .then(d => {
-        if (d.launch_count === 1 && !d.kaggle_connected) {
-          setTimeout(() => setShowKaggle(true), 1500);
-        }
-      })
-      .catch(() => {});
+    let active = true;
+    const checkSettings = () => {
+      fetch("http://localhost:8001/settings")
+        .then(r => {
+          if (!r.ok) throw new Error("not ok");
+          return r.json();
+        })
+        .then(d => {
+          if (!active) return;
+          if ((d.launch_count === 1 || d.launch_count % 5 === 0) && !d.kaggle_connected) {
+            setTimeout(() => {
+              if (active) setShowKaggle(true);
+            }, 1500);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setTimeout(checkSettings, 2000);
+          }
+        });
+    };
+    checkSettings();
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (
