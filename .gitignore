@@ -42,6 +42,9 @@ dist/
 Thumbs.db
 .DS_Store
 
+# Archives
+*.zip
+
 # Temp
 1
 test_backend_err.txt

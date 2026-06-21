@@ -149,6 +149,7 @@ export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showKaggle, setShowKaggle] = useState(false);
+  const [settings, setSettings] = useState<any>(null);
 
   // Auto-show Kaggle popup on first and every 5th launch if not connected
   useEffect(() => {
@@ -161,6 +162,7 @@ export default function HomePage() {
         })
         .then(d => {
           if (!active) return;
+          setSettings(d);
           if ((d.launch_count === 1 || d.launch_count % 5 === 0) && !d.kaggle_connected) {
             setTimeout(() => {
               if (active) setShowKaggle(true);
@@ -211,11 +213,19 @@ export default function HomePage() {
             {/* Profile button */}
             <button
               onClick={() => setShowProfile(v => !v)}
-              className="ml-2 w-8 h-8 rounded-full flex items-center justify-center transition-all"
-              style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: showProfile ? "0 0 12px rgba(99,102,241,0.5)" : "none" }}
+              className="ml-2 w-8 h-8 rounded-full flex items-center justify-center transition-all overflow-hidden"
+              style={{
+                background: "#18181b",
+                border: "1px solid rgba(255,255,255,0.15)",
+                boxShadow: showProfile ? "0 0 12px rgba(255,255,255,0.2)" : "none"
+              }}
               aria-label="Profile"
             >
-              <User size={14} color="#fff" />
+              {settings?.user_picture ? (
+                <img src={settings.user_picture} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <User size={14} color="#fff" />
+              )}
             </button>
           </nav>
 

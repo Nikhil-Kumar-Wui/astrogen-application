@@ -478,15 +478,6 @@ class LoadingWidget(QWidget):
 
         card_layout.addSpacing(20)
 
-        # Log console
-        self._log = QTextEdit()
-        self._log.setObjectName("logPanel")
-        self._log.setReadOnly(True)
-        self._log.setFixedHeight(110)
-        card_layout.addWidget(self._log)
-
-        self._log_entries = []
-
         outer.addWidget(card)
 
     def set_gpu(self, gpu_type: str):
@@ -512,25 +503,6 @@ class LoadingWidget(QWidget):
             elif "cpu" in msg.lower() or "no nvidia" in msg.lower():
                 self.set_gpu("cpu")
 
-        # Smart log — update in place if same step, else append
-        is_update = False
-        action_prefix = msg.split("(")[0].split("—")[0].strip()
-        if self._log_entries:
-            last = self._log_entries[-1]
-            if last.startswith("[→] " + action_prefix[:20]) or last.startswith("[✔] " + action_prefix[:20]):
-                self._log_entries[-1] = f"[→] {msg}"
-                is_update = True
-
-        if not is_update:
-            if self._log_entries:
-                prev = self._log_entries[-1]
-                if prev.startswith("[→]"):
-                    self._log_entries[-1] = "[✔]" + prev[3:].split("(")[0].rstrip() + " — done"
-            self._log_entries.append(f"[→] {msg}")
-
-        self._log.setPlainText("\n".join(self._log_entries))
-        sb = self._log.verticalScrollBar()
-        sb.setValue(sb.maximum())
 
 
 # ══════════════════════════════════════════════════════════════════════════════

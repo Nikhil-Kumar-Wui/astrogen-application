@@ -348,6 +348,47 @@ class SettingsUpdate(BaseModel):
     backend: Optional[str] = None   # "cpu" | "cuda"
 
 
+from fastapi.responses import RedirectResponse, HTMLResponse
+import requests
+
+def send_onboarding_email(email: str, name: str):
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    if not resend_key:
+        print("[Auth] RESEND_API_KEY not configured. Skipping email dispatch.")
+        return
+    
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {resend_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "from": "AstroGen Space Studio <onboarding@resend.dev>",
+        "to": [email],
+        "subject": "AstroGen Sign-in Successful!",
+        "html": f"""
+        <html>
+        <body style="font-family: sans-serif; background-color: #040508; color: #ffffff; padding: 30px; border-radius: 12px;">
+            <div style="max-width: 600px; margin: 0 auto; border: 1px solid #1f2937; padding: 20px; border-radius: 8px; background-color: #080b18;">
+                <h2 style="color: #6366f1; border-bottom: 1px solid #1f2937; padding-bottom: 10px;">✦ ASTROGEN SPACE STUDIO</h2>
+                <p>Hello <strong>{name}</strong>,</p>
+                <p>Welcome to AstroGen Space Studio! You have successfully signed in using Google.</p>
+                <p>Your workspace, models, and deep-learning modules are now active and ready for your astronomical exploration.</p>
+                <br>
+                <hr style="border: 0; border-top: 1px solid #1f2937;">
+                <p style="font-size: 11px; color: #64748b;">AstroGen Space Studio &bull; Local Desktop Instance</p>
+            </div>
+        </body>
+        </html>
+        """
+    }
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"[Auth] Sent welcome email: Status={r.status_code}, Response={r.text}")
+    except Exception as e:
+        print(f"[Auth] Error sending welcome email: {e}")
+
+
 @app.get("/settings")
 def get_settings():
     """Return current settings (keys partially masked for security)."""
@@ -366,7 +407,104 @@ def get_settings():
         "launch_count": state.get("launch_count", 0),
         "kaggle_username": env.get("KAGGLE_USERNAME", ""),
         "kaggle_key_set": bool(env.get("KAGGLE_KEY", "")),
+        "user_name": state.get("user_name", ""),
+        "user_email": state.get("user_email", ""),
+        "user_picture": state.get("user_picture", ""),
     }
+
+
+@app.get("/auth/google")
+def auth_google():
+    """Redirect to Google OAuth consent page."""
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    redirect_uri = "http://localhost:8001/auth/callback"
+    url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={client_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&response_type=code"
+        f"&scope=openid%20profile%20email"
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/callback")
+def auth_callback(code: str):
+    """Handle callback from Google and retrieve user credentials."""
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    redirect_uri = "http://localhost:8001/auth/callback"
+
+    # Exchange authorization code for tokens
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    
+    try:
+        r = requests.post(token_url, data=data, timeout=10)
+        tokens = r.json()
+        access_token = tokens.get("access_token")
+        if not access_token:
+            return HTMLResponse("<h3>Authentication failed: No access token returned.</h3>")
+            
+        # Get user details from userinfo endpoint
+        userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        info_resp = requests.get(userinfo_url, headers=headers, timeout=10)
+        user_info = info_resp.json()
+        
+        user_name = user_info.get("name", "")
+        user_email = user_info.get("email", "")
+        user_picture = user_info.get("picture", "")
+        
+        # Save user to app state
+        state = _read_state()
+        state["user_name"] = user_name
+        state["user_email"] = user_email
+        state["user_picture"] = user_picture
+        _write_state(state)
+        
+        # Send transactional welcome email
+        send_onboarding_email(user_email, user_name)
+        
+        # Display a beautiful success page that instructs user they can return to AstroGen
+        html_content = """
+        <html>
+        <body style="font-family: 'Segoe UI', sans-serif; background-color: #040508; color: #ffffff; text-align: center; padding-top: 100px;">
+            <div style="max-width: 450px; margin: 0 auto; padding: 40px; border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; background-color: #080b18; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);">
+                <div style="font-size: 48px; color: #10b981; margin-bottom: 20px;">✓</div>
+                <h2 style="margin-bottom: 10px; font-weight: 700; letter-spacing: 1px;">Signed In Successfully</h2>
+                <p style="color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 30px;">
+                    Welcome to AstroGen Space Studio. You may now close this browser tab and return to the application.
+                </p>
+                <div style="font-size: 11px; color: #475569;">ASTROGEN SPACE STUDIO</div>
+            </div>
+        </body>
+        </html>
+        """
+        return HTMLResponse(html_content)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(f"<h3>Authentication error: {str(e)}</h3>")
+
+
+@app.post("/auth/logout")
+def auth_logout():
+    """Log user out by clearing user fields in app state."""
+    state = _read_state()
+    state.pop("user_name", None)
+    state.pop("user_email", None)
+    state.pop("user_picture", None)
+    _write_state(state)
+    return {"ok": True}
+
 
 
 @app.post("/settings")
