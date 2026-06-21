@@ -30,6 +30,8 @@ requests>=2.31.0
 
 # Database
 # SQLite3 is built into Python — no install needed
+psycopg2-binary>=2.9.0
+
 
 # Utilities
 numpy>=1.26.0
