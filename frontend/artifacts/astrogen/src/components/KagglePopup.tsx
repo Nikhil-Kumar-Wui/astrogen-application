@@ -32,7 +32,7 @@ export function KagglePopup({ onClose }: KagglePopupProps) {
       .then(r => r.json())
       .then(d => {
         if (d.kaggle_username) setUsername(d.kaggle_username);
-        // We don't pre-fill the key for security, but we know it might be set
+        if (d.kaggle_key) setKaggleKey(d.kaggle_key);
       })
       .catch(() => {});
       
@@ -137,8 +137,8 @@ export function KagglePopup({ onClose }: KagglePopupProps) {
         // Ignore single fetch failures and continue polling
       }
       
-      // Timeout after 4 minutes (48 checks)
-      if (attempts >= 48) {
+      // Timeout after 10 minutes (120 checks × 5s) — model download + extraction can take 5-7 min
+      if (attempts >= 120) {
         if (pollTimerRef.current) clearInterval(pollTimerRef.current);
         setError("Connection timeout. The server took too long to boot. You can check the logs on Kaggle or switch to manual input.");
         setStep("credentials");
@@ -156,13 +156,15 @@ export function KagglePopup({ onClose }: KagglePopupProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.85)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
       <div
-        className="relative w-full max-w-lg rounded-2xl overflow-hidden"
+        className="relative w-full max-w-lg rounded-2xl flex flex-col"
         style={{
-          background: "linear-gradient(135deg, #0a0b1a 0%, #0d1121 100%)",
+          background: "#000000",
           border: "1px solid rgba(99,102,241,0.25)",
           boxShadow: "0 0 80px rgba(99,102,241,0.15), 0 24px 80px rgba(0,0,0,0.8)",
+          maxHeight: "90vh",
+          overflow: "hidden",
         }}
       >
         {/* Header */}
@@ -210,7 +212,7 @@ export function KagglePopup({ onClose }: KagglePopupProps) {
         </div>
 
         {/* Content */}
-        <div className="px-6 pb-6 pt-4 space-y-4">
+        <div className="px-6 pb-6 pt-4 space-y-4 overflow-y-auto flex-1" style={{ overflowY: "auto" }}>
           
           {/* ── Step 1: Intro ── */}
           {step === "intro" && (
@@ -361,26 +363,42 @@ export function KagglePopup({ onClose }: KagglePopupProps) {
 
           {/* ── Step 3: Launching Loader ── */}
           {step === "launching" && (
-            <div className="text-center py-6 space-y-4">
-              <Loader2 size={36} className="animate-spin text-indigo-400 mx-auto" />
+            <div className="text-center space-y-5" style={{ paddingTop: "2rem", paddingBottom: "2rem" }}>
+              {/* Animated rings */}
+              <div className="relative flex items-center justify-center" style={{ height: 80 }}>
+                <div className="absolute w-16 h-16 rounded-full" style={{ border: "2px solid rgba(99,102,241,0.15)", animation: "ping 2s cubic-bezier(0,0,0.2,1) infinite" }} />
+                <div className="absolute w-12 h-12 rounded-full" style={{ border: "2px solid rgba(99,102,241,0.2)", animation: "ping 2s cubic-bezier(0,0,0.2,1) infinite 0.5s" }} />
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.4)" }}>
+                  <Loader2 size={20} className="animate-spin" style={{ color: "#818cf8" }} />
+                </div>
+              </div>
+
               <div>
                 <h3 className="text-white font-bold text-lg">Launching GPU Server</h3>
-                <p className="text-xs mt-1 max-w-sm mx-auto" style={{ color: "#94a3b8" }}>
+                <p className="text-xs mt-2 max-w-sm mx-auto" style={{ color: "#94a3b8", lineHeight: 1.6 }}>
                   {launchStatus}
-                </p>
-                <p className="text-[10px] mt-3" style={{ color: "#475569" }}>
-                  This takes 1.5 - 2 minutes on first run as Kaggle installs requirements.
                 </p>
               </div>
 
-              <div className="pt-2">
-                <button onClick={handleCancelAutoLaunch}
-                  className="px-5 py-2 rounded-xl text-xs transition-all"
-                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}
-                >
-                  Cancel & Stop
-                </button>
+              {/* Progress bar */}
+              <div className="w-full rounded-full overflow-hidden" style={{ height: 3, background: "rgba(255,255,255,0.06)" }}>
+                <div className="h-full rounded-full" style={{
+                  background: "linear-gradient(90deg, #6366f1, #818cf8)",
+                  width: "60%",
+                  animation: "slideProgress 3s ease-in-out infinite alternate",
+                }} />
               </div>
+
+              <p className="text-[10px]" style={{ color: "#475569" }}>
+                ⏱ Takes ~1.5–2 min on first run as Kaggle installs requirements
+              </p>
+
+              <button onClick={handleCancelAutoLaunch}
+                className="px-5 py-2 rounded-xl text-xs transition-all"
+                style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}
+              >
+                Cancel &amp; Stop
+              </button>
             </div>
           )}
 

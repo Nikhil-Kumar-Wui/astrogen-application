@@ -145,41 +145,44 @@ const PIPELINE = [
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
-  const { data: status } = useGetStatus({ query: { refetchInterval: 8000 } });
+  const { data: status } = useGetStatus({ query: { refetchInterval: 8000 } as any });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showKaggle, setShowKaggle] = useState(false);
   const [settings, setSettings] = useState<any>(null);
+  const [imgError, setImgError] = useState(false);
 
-  // Auto-show Kaggle popup on first and every 5th launch if not connected
+  // Reset image error state when user picture URL changes
+  useEffect(() => {
+    setImgError(false);
+  }, [settings?.user_picture]);
+
+  // Poll settings to pick up sign-in status and Kaggle connection dynamically
   useEffect(() => {
     let active = true;
-    const checkSettings = () => {
+    const fetchSettings = () => {
       fetch("http://localhost:8001/settings")
         .then(r => {
-          if (!r.ok) throw new Error("not ok");
+          if (!r.ok) throw new Error();
           return r.json();
         })
         .then(d => {
           if (!active) return;
           setSettings(d);
-          if ((d.launch_count === 1 || d.launch_count % 5 === 0) && !d.kaggle_connected) {
-            setTimeout(() => {
-              if (active) setShowKaggle(true);
-            }, 1500);
+          setImgError(false);
+          if ((d.launch_count === 1 || d.launch_count % 5 === 0) && !d.kaggle_connected && !showKaggle) {
+            setShowKaggle(true);
           }
         })
-        .catch(() => {
-          if (active) {
-            setTimeout(checkSettings, 2000);
-          }
-        });
+        .catch(() => {});
     };
-    checkSettings();
+    fetchSettings();
+    const interval = setInterval(fetchSettings, 4000);
     return () => {
       active = false;
+      clearInterval(interval);
     };
-  }, []);
+  }, [showKaggle]);
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -221,8 +224,13 @@ export default function HomePage() {
               }}
               aria-label="Profile"
             >
-              {settings?.user_picture ? (
-                <img src={settings.user_picture} alt="Profile" className="w-full h-full object-cover" />
+              {settings?.user_picture && !imgError ? (
+                <img 
+                  src={settings.user_picture} 
+                  alt="Profile" 
+                  className="w-full h-full object-cover" 
+                  onError={() => setImgError(true)}
+                />
               ) : (
                 <User size={14} color="#fff" />
               )}

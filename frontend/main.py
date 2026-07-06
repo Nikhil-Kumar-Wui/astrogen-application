@@ -6,6 +6,21 @@ No Intel XPU / DirectML support — uses NVIDIA CUDA or CPU only.
 
 import sys
 import os
+
+def hide_console():
+    try:
+        import ctypes
+        if os.name == 'nt':
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd != 0:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # 0 = SW_HIDE
+    except Exception:
+        pass
+
+# Hide console immediately on startup if compiled in console mode
+if getattr(sys, 'frozen', False):
+    hide_console()
+
 import subprocess
 import time
 import socket
@@ -22,11 +37,77 @@ from PyQt6.QtGui import QIcon, QColor, QPalette, QFont, QLinearGradient, QPainte
 from PyQt6.QtCore import QRect, QPoint
 import ctypes
 
+# Force PyInstaller static analysis to package backend modules
+if False:
+    import backend.main
+    import backend.database
+    import backend.gemini
+    import backend.kaggle_launch
+    import backend.models
+    import backend.security
+
 # ── Paths ────────────────────────────────────────────────────────────────────
-FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR     = os.path.dirname(FRONTEND_DIR)
-PORT         = 5173
+IS_FROZEN    = getattr(sys, 'frozen', False)
+if IS_FROZEN:
+    ROOT_DIR     = os.path.dirname(sys.executable)
+    FRONTEND_DIR = os.path.join(getattr(sys, '_MEIPASS', ROOT_DIR), "frontend")
+else:
+    FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
+    ROOT_DIR     = os.path.dirname(FRONTEND_DIR)
+PORT         = 8001 if IS_FROZEN else 5173
 HOST         = "127.0.0.1"
+
+PERSISTENT_DIR = os.path.join(os.getenv('APPDATA'), 'AstroGen') if (IS_FROZEN and os.name == 'nt' and os.getenv('APPDATA')) else ROOT_DIR
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+
+def init_persistent_env():
+    persistent_env = os.path.join(PERSISTENT_DIR, ".env")
+    bundled_env = os.path.join(getattr(sys, '_MEIPASS', ROOT_DIR), ".env")
+    
+    if not os.path.exists(bundled_env):
+        return
+
+    # Read bundled env
+    bundled_vars = {}
+    try:
+        with open(bundled_env, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    k, _, v = line.partition('=')
+                    bundled_vars[k.strip()] = v.strip()
+    except Exception:
+        pass
+
+    # Read persistent env
+    persistent_vars = {}
+    if os.path.exists(persistent_env):
+        try:
+            with open(persistent_env, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line and not line.startswith('#'):
+                        k, _, v = line.partition('=')
+                        persistent_vars[k.strip()] = v.strip()
+        except Exception:
+            pass
+
+    # Check for missing keys and append them
+    keys_to_copy = ["DATABASE_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "RESEND_API_KEY", "HF_API_TOKEN"]
+    updates = {}
+    for key in keys_to_copy:
+        if key in bundled_vars and key not in persistent_vars:
+            updates[key] = bundled_vars[key]
+
+    if updates:
+        try:
+            with open(persistent_env, "a", encoding="utf-8") as f:
+                for k, v in updates.items():
+                    f.write(f"\n{k}={v}")
+        except Exception:
+            pass
+
+init_persistent_env()
 
 # ── Windows console window suppression ───────────────────────────────────────
 SUBPROCESS_KWARGS = {}
@@ -42,7 +123,7 @@ except Exception:
 
 # ── .env helpers ──────────────────────────────────────────────────────────────
 def get_env_var(key):
-    env_path = os.path.join(ROOT_DIR, ".env")
+    env_path = os.path.join(PERSISTENT_DIR, ".env")
     if not os.path.exists(env_path):
         return None
     try:
@@ -56,7 +137,7 @@ def get_env_var(key):
     return None
 
 def set_env_var(key, value):
-    env_path = os.path.join(ROOT_DIR, ".env")
+    env_path = os.path.join(PERSISTENT_DIR, ".env")
     content = ""
     try:
         if os.path.exists(env_path):
@@ -76,7 +157,7 @@ def set_env_var(key, value):
 
 # ── app_state.json helpers ────────────────────────────────────────────────────
 def get_app_state():
-    state_path = os.path.join(ROOT_DIR, "data", "app_state.json")
+    state_path = os.path.join(PERSISTENT_DIR, "data", "app_state.json")
     default = {"launch_count": 0, "kaggle_connected": False, "kaggle_url": ""}
     try:
         if os.path.exists(state_path):
@@ -87,7 +168,7 @@ def get_app_state():
     return default
 
 def set_app_state(state: dict):
-    state_path = os.path.join(ROOT_DIR, "data", "app_state.json")
+    state_path = os.path.join(PERSISTENT_DIR, "data", "app_state.json")
     try:
         os.makedirs(os.path.dirname(state_path), exist_ok=True)
         with open(state_path, "w", encoding="utf-8") as f:
@@ -218,17 +299,41 @@ class DependencyInstaller(QThread):
 
     def run(self):
         try:
+            if IS_FROZEN:
+                self.progress.emit(STEP_MESSAGES[0], 20)
+                gpu = self._detect_gpu()
+                if gpu == "nvidia":
+                    self.progress.emit("NVIDIA GPU detected — CUDA acceleration enabled", 60)
+                    set_env_var("ASTROGEN_BACKEND", "cuda")
+                else:
+                    self.progress.emit("No NVIDIA GPU found — CPU mode selected", 60)
+                    set_env_var("ASTROGEN_BACKEND", "cpu")
+                time.sleep(0.5)
+                self.progress.emit("AstroGen engine ready", 100)
+                self.finished.emit()
+                return
+
             # ── Shortcut: already set up ──────────────────────────────────
             venv_dir = os.path.join(ROOT_DIR, ".venv")
             python_exe = os.path.join(venv_dir, "Scripts", "python.exe") if os.name == "nt" \
                          else os.path.join(venv_dir, "bin", "python")
             backend_set = get_env_var("ASTROGEN_BACKEND")
             if backend_set and os.path.exists(python_exe):
-                # Quick smoke check that key packages are importable
-                smoke = subprocess.run(
-                    [python_exe, "-c", "import torch, fastapi, PyQt6"],
-                    capture_output=True, timeout=10, **SUBPROCESS_KWARGS
+                # Quick smoke check: fast packages first (5s), then torch (60s)
+                fast_smoke = subprocess.run(
+                    [python_exe, "-c", "import fastapi, PyQt6"],
+                    capture_output=True, timeout=15, **SUBPROCESS_KWARGS
                 ).returncode == 0
+                torch_smoke = False
+                if fast_smoke:
+                    try:
+                        torch_smoke = subprocess.run(
+                            [python_exe, "-c", "import torch"],
+                            capture_output=True, timeout=60, **SUBPROCESS_KWARGS
+                        ).returncode == 0
+                    except subprocess.TimeoutExpired:
+                        torch_smoke = True  # Torch exists but slow — still OK to proceed
+                smoke = fast_smoke  # Only require fast packages for quick boot
                 if smoke:
                     self.progress.emit("Workspace ready — fast boot!", 100)
                     self.finished.emit()
@@ -295,7 +400,7 @@ class DependencyInstaller(QThread):
                     pkgs = [
                         "fastapi", "uvicorn", "python-multipart", "python-dotenv",
                         "pydantic", "transformers==4.38.2", "accelerate==0.27.2",
-                        "peft==0.9.0", "safetensors", "Pillow", "open_clip_torch",
+                        "peft>=0.17.0", "safetensors", "Pillow", "open_clip_torch",
                         "huggingface_hub", "google-generativeai", "requests", "numpy"
                     ]
                     self._pip(python_exe, ["install"] + pkgs,
@@ -535,7 +640,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("AstroGen Space Studio")
         self.setMinimumSize(1280, 800)
-        icon_path = os.path.join(FRONTEND_DIR, "logo.svg")
+        icon_path = os.path.join(FRONTEND_DIR, "logo.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -577,9 +682,10 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self._loading.update_progress("Launching AstroGen servers...", 100)
         kill_port(8001)
-        kill_port(5173)
+        if not IS_FROZEN:
+            kill_port(5173)
+            self._vite_proc = start_vite()
         self._start_backend()
-        self._vite_proc = start_vite()
         self._timer.start(500)
 
     def _on_error(self, err: str):
@@ -587,26 +693,53 @@ class MainWindow(QMainWindow):
         self._loading._status.setStyleSheet("color: #ef4444;")
 
     def _start_backend(self):
-        venv_dir = os.path.join(ROOT_DIR, ".venv")
-        python_exe = os.path.join(venv_dir, "Scripts", "python.exe") if os.name == "nt" \
-                     else os.path.join(venv_dir, "bin", "python")
-        backend_main = os.path.join(ROOT_DIR, "backend", "main.py")
-        log_file     = os.path.join(ROOT_DIR, "backend_log.txt")
-        proc = subprocess.Popen(
-            [python_exe, "-u", backend_main],
-            cwd=ROOT_DIR,
-            stdout=open(log_file, "a"),
-            stderr=subprocess.STDOUT,
-            shell=(os.name == "nt"),
-            **SUBPROCESS_KWARGS
-        )
-        def _kill():
+        if IS_FROZEN:
+            import threading
+            import uvicorn
+            import traceback
+            # Ensure backend modules can be imported
+            backend_path = os.path.join(getattr(sys, "_MEIPASS", ROOT_DIR), "backend")
+            if backend_path not in sys.path:
+                sys.path.insert(0, backend_path)
             try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **SUBPROCESS_KWARGS)
-            except Exception:
-                proc.terminate()
-        atexit.register(_kill)
+                from backend.main import app
+            except Exception as e:
+                with open(os.path.join(PERSISTENT_DIR, "crash_log.txt"), "w") as f:
+                    f.write("Failed to import backend:\n")
+                    f.write(traceback.format_exc())
+                raise e
+            
+            def _run():
+                try:
+                    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+                except Exception as ex:
+                    with open(os.path.join(PERSISTENT_DIR, "crash_log.txt"), "a") as f:
+                        f.write("Uvicorn thread crashed:\n")
+                        f.write(traceback.format_exc())
+            
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+        else:
+            venv_dir = os.path.join(ROOT_DIR, ".venv")
+            python_exe = os.path.join(venv_dir, "Scripts", "python.exe") if os.name == "nt" \
+                         else os.path.join(venv_dir, "bin", "python")
+            backend_main = os.path.join(ROOT_DIR, "backend", "main.py")
+            log_file     = os.path.join(ROOT_DIR, "backend_log.txt")
+            proc = subprocess.Popen(
+                [python_exe, "-u", backend_main],
+                cwd=ROOT_DIR,
+                stdout=open(log_file, "a", encoding="utf-8"),
+                stderr=subprocess.STDOUT,
+                shell=(os.name == "nt"),
+                **SUBPROCESS_KWARGS
+            )
+            def _kill():
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **SUBPROCESS_KWARGS)
+                except Exception:
+                    proc.terminate()
+            atexit.register(_kill)
 
     def _check_server(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -621,6 +754,16 @@ class MainWindow(QMainWindow):
             self._web.setUrl(QUrl(URL))
         except Exception:
             pass
+
+    def closeEvent(self, event):
+        """Clean up background processes and terminate Kaggle session on exit."""
+        print("[AstroGen] Closing application, terminating Kaggle session...")
+        try:
+            import requests
+            requests.delete("http://127.0.0.1:8001/kaggle/url", timeout=5)
+        except Exception as e:
+            print(f"[AstroGen] Failed to auto-terminate Kaggle session on exit: {e}")
+        event.accept()
 
 
 # ── Vite process launcher ─────────────────────────────────────────────────────
@@ -640,7 +783,7 @@ def start_vite():
         cwd=astrogen_dir,               # Must be the astrogen folder
         env=env,
         shell=True,
-        stdout=open(log_file, "a"),
+        stdout=open(log_file, "a", encoding="utf-8"),
         stderr=subprocess.STDOUT,
         **SUBPROCESS_KWARGS
     )
@@ -655,11 +798,25 @@ def start_vite():
 
 
 def main():
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = MainWindow()
-    window.showMaximized()
-    sys.exit(app.exec())
+    import multiprocessing
+    multiprocessing.freeze_support()
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+        
+        if getattr(sys, 'frozen', False):
+            # Auto-hide the console window after 3 seconds for a clean UI launch
+            QTimer.singleShot(3000, hide_console)
+            
+        window = MainWindow()
+        window.showMaximized()
+        sys.exit(app.exec())
+    except Exception as e:
+        import traceback
+        with open(os.path.join(PERSISTENT_DIR, "crash_log.txt"), "w") as f:
+            f.write("Exception in main:\n")
+            f.write(traceback.format_exc())
+        raise e
 
 
 if __name__ == "__main__":

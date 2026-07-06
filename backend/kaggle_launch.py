@@ -7,6 +7,10 @@ import base64
 import shutil
 import json
 import requests
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PERSISTENT_DIR = os.path.join(os.getenv('APPDATA'), 'AstroGen') if (getattr(sys, 'frozen', False) and os.name == 'nt' and os.getenv('APPDATA')) else PROJECT_ROOT
 
 def pack_backend_to_zip_b64():
     backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -53,61 +57,103 @@ print("[AstroGen] Environment configured.")
 # 3. Install dependencies
 print("[AstroGen] Installing libraries...")
 subprocess.run(
-    ["pip", "install", "-q", "fastapi", "uvicorn", "python-multipart", "pydantic", "peft==0.9.0", "accelerate==0.27.2", "transformers==4.38.2", "google-generativeai", "requests", "huggingface_hub"],
+    ["pip", "install", "-q", "fastapi", "uvicorn", "python-multipart", "pydantic", "peft>=0.17.0", "accelerate>=0.29.3", "transformers>=4.40.0", "diffusers>=0.27.2", "google-generativeai", "requests", "huggingface_hub"],
     check=True
 )
 print("[AstroGen] Libraries installed.")
 
-# 4. Mount AstroGen models from Kaggle Input dataset
-print("[AstroGen] Exposing models from Kaggle input dataset...")
+# 4. Locate AstroGen models — try native mount first, then REST API fallback
+print("[AstroGen] Locating AstroGen model files...")
 try:
-    import shutil
-    INPUT_DIR = "/kaggle/input/astrogen-models-private"
-    MODELS_DIR = "/kaggle/working/models"
-    
-    # Check candidates for dataset mount
-    candidates = [
-        "/kaggle/input/astrogen-models-private",
-        "/kaggle/input/astrogen-models-private/models",
-        "/kaggle/input/astrogen-models-private-dataset",
-    ]
-    
-    found_dir = None
-    for c in candidates:
-        if os.path.exists(c):
-            found_dir = c
-            break
-            
-    if not found_dir:
-        # Scan /kaggle/input/ dynamically
-        if os.path.exists("/kaggle/input"):
-            for folder in os.listdir("/kaggle/input"):
-                p = os.path.join("/kaggle/input", folder)
-                if os.path.isdir(p):
-                    found_dir = p
-                    break
-                    
-    if found_dir:
-        print(f"[AstroGen] Found mounted dataset at: {{found_dir}}")
-        if os.path.exists(MODELS_DIR) or os.path.islink(MODELS_DIR):
-            if os.path.islink(MODELS_DIR):
-                os.unlink(MODELS_DIR)
-            else:
-                shutil.rmtree(MODELS_DIR)
-                
-        # Symlink the models folder for instant, zero-copy load
-        if os.path.exists(os.path.join(found_dir, "astrogen_merged")):
-            os.symlink(found_dir, MODELS_DIR)
-        elif os.path.exists(os.path.join(found_dir, "models", "astrogen_merged")):
-            os.symlink(os.path.join(found_dir, "models"), MODELS_DIR)
-        else:
-            os.symlink(found_dir, MODELS_DIR)
-            
-        print("[AstroGen] Symlinked models successfully from dataset mount.")
+    import shutil, zipfile, tempfile, requests as _rq
+    KAGGLE_INPUT_DIR = "/kaggle/input/astrogen-models-private"
+    MODELS_WORK_DIR = "/kaggle/working/downloaded_models"
+
+    # Private dataset fallback configuration
+    _DEV_USER = "nikhilkumarwui"
+    _DEV_KEY  = "753c5ecfa4c26f865ff577d95f253c29"
+    _DS_SLUG  = "nikhilkumarwui/astrogen-models-private"
+
+    def find_astrogen_merged(search_root):
+        for dirpath, dirnames, filenames in os.walk(search_root):
+            if os.path.basename(dirpath) == "astrogen_merged":
+                return dirpath
+            for d in dirnames:
+                if d == "astrogen_merged":
+                    return os.path.join(dirpath, d)
+        return None
+
+    def _do_streaming_download(dest_dir):
+        os.makedirs(dest_dir, exist_ok=True)
+        url = "https://www.kaggle.com/api/v1/datasets/download/" + _DS_SLUG
+        print("[AstroGen] Fetching dataset zip from: " + url)
+        resp = _rq.get(url, auth=(_DEV_USER, _DEV_KEY), stream=True, timeout=600, verify=False)
+        if resp.status_code != 200:
+            raise RuntimeError("[AstroGen] Download HTTP " + str(resp.status_code) + ": " + resp.text[:300])
+        print("[AstroGen] Streaming to disk...")
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip", dir=dest_dir)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                downloaded = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded % (50 * 1024 * 1024) < 65536:
+                            print("[AstroGen] Downloaded " + str(downloaded // (1024*1024)) + " MB...")
+            print("[AstroGen] Download done (" + str(downloaded // (1024*1024)) + " MB). Extracting...")
+            with zipfile.ZipFile(tmp_path) as zf:
+                zf.extractall(dest_dir)
+            print("[AstroGen] Extracted to: " + dest_dir)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def _symlink_models(models_parent):
+        for target in ["/kaggle/working/models", "/kaggle/working/backend/models"]:
+            try:
+                if os.path.islink(target):
+                    os.unlink(target)
+                elif os.path.isdir(target):
+                    import shutil as _sh
+                    _sh.rmtree(target)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                os.symlink(models_parent, target)
+                print("[AstroGen] [OK] Symlinked " + models_parent + " -> " + target)
+            except Exception as se:
+                print("[AstroGen] WARNING: Symlink to " + target + " failed: " + str(se))
+        
+        check1 = "/kaggle/working/models/astrogen_merged"
+        check2 = "/kaggle/working/backend/models/astrogen_merged"
+        print("[AstroGen] Verifying paths: working/models/astrogen_merged: " + str(os.path.exists(check1)) + ", backend/models/astrogen_merged: " + str(os.path.exists(check2)))
+
+    # --- Strategy 1: Check native mount ---
+    input_contents = os.listdir("/kaggle/input") if os.path.exists("/kaggle/input") else []
+    print("[AstroGen] /kaggle/input/ contents: " + str(input_contents))
+
+    merged_src = find_astrogen_merged(KAGGLE_INPUT_DIR)
+    if not merged_src:
+        merged_src = find_astrogen_merged("/kaggle/input")
+
+    if merged_src:
+        print("[AstroGen] [OK] Native mount found astrogen_merged at: " + merged_src)
+        _symlink_models(os.path.dirname(merged_src))
     else:
-        print("[AstroGen] WARNING: No mounted dataset found under /kaggle/input.")
+        # --- Strategy 2: Fallback to Streaming Download ---
+        print("[AstroGen] Native mount empty. Falling back to REST API download...")
+        _do_streaming_download(MODELS_WORK_DIR)
+        merged_src = find_astrogen_merged(MODELS_WORK_DIR)
+        if merged_src:
+            print("[AstroGen] [OK] Download found astrogen_merged at: " + merged_src)
+            _symlink_models(os.path.dirname(merged_src))
+        else:
+            print("[AstroGen] [ERROR] astrogen_merged not found after download. Contents:")
+            for root, dirs, files in os.walk(MODELS_WORK_DIR):
+                depth = root.replace(MODELS_WORK_DIR, "").count(os.sep)
+                if depth < 3:
+                    print("  " * depth + os.path.basename(root) + "/")
 except Exception as e:
-    print(f"[AstroGen] WARNING: Failed to mount dataset: {{e}}")
+    print(f"[AstroGen] WARNING: Error setting up models: {{e}}")
 
 
 # 5. Launch backend process
@@ -121,8 +167,16 @@ print("[AstroGen] Backend server started.")
 
 # 6. Start Tunnel (tries multiple options)
 print("[AstroGen] Starting Tunnel...")
+try:
+    print("[AstroGen] Downloading cloudflared (TryCloudflare) for reliable tunneling...")
+    subprocess.run(["wget", "-q", "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "-O", "/kaggle/working/cloudflared"])
+    subprocess.run(["chmod", "+x", "/kaggle/working/cloudflared"])
+except Exception as e:
+    print(f"[AstroGen] Could not download cloudflared: {{e}}")
+
 tunnel_url = None
 tunnels_to_try = [
+    ["/kaggle/working/cloudflared", "tunnel", "--url", "http://localhost:8001"],
     ["ssh", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R0:localhost:8001", "qr@free.pinggy.io"],
     ["ssh", "-o", "StrictHostKeyChecking=no", "-p", "443", "-R0:localhost:8001", "qr@pinggy.io"],
     ["ssh", "-o", "StrictHostKeyChecking=no", "-R", "80:localhost:8001", "nokey@localhost.run"],
@@ -156,7 +210,7 @@ for idx, cmd in enumerate(tunnels_to_try):
             if os.path.exists(log_path):
                 with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
-                urls = re.findall(r"https://[a-zA-Z0-9.-]+\\.(?:pinggy\\.link|localhost\\.run|lhr\\.life|lhrtunnel\\.link)", content)
+                urls = re.findall(r"https://[a-zA-Z0-9.-]+\\.(?:pinggy\\.link|localhost\\.run|lhr\\.life|lhrtunnel\\.link|trycloudflare\\.com)", content)
                 valid_url = None
                 for u in urls:
                     u_lower = u.lower()
@@ -217,8 +271,7 @@ def launch_kaggle_server(username, key, gemini_key=""):
     # Read HuggingFace read token from local .env
     hf_token = ""
     try:
-        project_root_env = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        env_path = os.path.join(project_root_env, ".env")
+        env_path = os.path.join(PERSISTENT_DIR, ".env")
         if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as ef:
                 for line in ef:
@@ -229,9 +282,8 @@ def launch_kaggle_server(username, key, gemini_key=""):
     except Exception:
         pass
 
-    # Setup temporary directory inside data
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    temp_dir = os.path.join(project_root, "data", f"temp_kaggle_{session_token}")
+    # Setup temporary directory inside writable PERSISTENT_DIR/data
+    temp_dir = os.path.join(PERSISTENT_DIR, "data", f"temp_kaggle_{session_token}")
     os.makedirs(temp_dir, exist_ok=True)
     
     try:

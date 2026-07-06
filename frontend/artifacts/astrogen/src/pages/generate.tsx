@@ -19,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Plus, MessageSquare, Trash2, Send, Image as ImageIcon,
   Upload, Download, Copy, Maximize2, Sparkles, Brain,
-  Cpu, MessageCircle, PanelLeftClose, PanelLeftOpen, ArrowLeft, X
+  Cpu, MessageCircle, PanelLeftClose, PanelLeftOpen, ArrowLeft, X, User
 } from "lucide-react";
 import { MissionControlLoader } from "@/components/MissionControlLoader";
 import { toast } from "sonner";
@@ -28,6 +28,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ProfilePanel } from "@/components/ProfilePanel";
 
 function PlanetLogo({ className = "w-5 h-5" }: { className?: string }) {
   return (
@@ -55,6 +56,38 @@ export default function GeneratePage() {
   const queryClient = useQueryClient();
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [selectedModel, setSelectedModel] = useState("lora_sd");
+  const [showProfile, setShowProfile] = useState(false);
+  const [settings, setSettings] = useState<any>(null);
+  const [imgError, setImgError] = useState(false);
+
+  // Reset image error state when user picture URL changes
+  useEffect(() => {
+    setImgError(false);
+  }, [settings?.user_picture]);
+
+  // Poll settings to pick up sign-in status dynamically
+  useEffect(() => {
+    let active = true;
+    const fetchSettings = () => {
+      fetch("http://localhost:8001/settings")
+        .then(r => {
+          if (!r.ok) throw new Error();
+          return r.json();
+        })
+        .then(d => {
+          if (!active) return;
+          setSettings(d);
+          setImgError(false);
+        })
+        .catch(() => {});
+    };
+    fetchSettings();
+    const interval = setInterval(fetchSettings, 4000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
   const [input, setInput] = useState("");
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
@@ -62,11 +95,11 @@ export default function GeneratePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { data: status } = useGetStatus({ query: { refetchInterval: 8000 } });
+  const { data: status } = useGetStatus({ query: { refetchInterval: 8000 } as any });
   const sessionsQuery = useGetSessions();
   const sessions = sessionsQuery.data || [];
   const { data: messages = [] } = useGetSessionMessages(activeSessionId!, {
-    query: { enabled: !!activeSessionId }
+    query: { enabled: !!activeSessionId } as any
   });
 
   const createSession = useCreateSession();
@@ -409,10 +442,31 @@ export default function GeneratePage() {
               </span>
             )}
             <Link href="/">
-              <button className="p-1.5 text-zinc-700 hover:text-zinc-400 transition-colors rounded-md hover:bg-white/[0.05]">
+              <button className="p-1.5 text-zinc-700 hover:text-zinc-400 transition-colors rounded-md hover:bg-white/[0.05]" title="Go Back">
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </Link>
+            {/* Profile button */}
+            <button
+              onClick={() => setShowProfile(v => !v)}
+              className="w-7 h-7 rounded-full flex items-center justify-center transition-all overflow-hidden border border-white/10 hover:border-white/20 hover:scale-105"
+              style={{
+                background: "#18181b",
+                boxShadow: showProfile ? "0 0 10px rgba(255,255,255,0.2)" : "none"
+              }}
+              aria-label="Profile"
+            >
+              {settings?.user_picture && !imgError ? (
+                <img 
+                  src={settings.user_picture} 
+                  alt="Profile" 
+                  className="w-full h-full object-cover" 
+                  onError={() => setImgError(true)}
+                />
+              ) : (
+                <User size={13} color="#fff" />
+              )}
+            </button>
           </div>
         </div>
 
@@ -452,6 +506,13 @@ export default function GeneratePage() {
                           ? "bg-white/[0.07] border border-white/[0.08] rounded-tr-sm"
                           : "bg-white/[0.04] border border-white/[0.06] rounded-tl-sm"
                       }`}>
+                        {msg.role === "user" && (
+                          <div className="flex items-center gap-1.5 mb-3 pb-2 border-b border-white/[0.06] text-[10px] font-mono text-zinc-500 justify-end">
+                            <span>{settings?.user_name ? settings.user_name.split(" ")[0].toUpperCase() : "YOU"}</span>
+                            <User className="w-2.5 h-2.5" />
+                          </div>
+                        )}
+
                         {msg.role === "assistant" && msg.model_used && (
                           <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/[0.06] text-[11px] font-mono text-zinc-600">
                             <Brain className="w-3 h-3" />
@@ -676,6 +737,10 @@ export default function GeneratePage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {showProfile && (
+        <ProfilePanel onClose={() => setShowProfile(false)} />
+      )}
     </div>
   );
 }

@@ -30,7 +30,15 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [disconnecting, setDisconnecting] = useState(false);
   const [kaggleReachable, setKaggleReachable] = useState<boolean | null>(null);
+  const [imgError, setImgError] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Track if we've done at least one reachability check yet (to show spinner on first load)
+  const reachabilityCheckedRef = useRef(false);
+
+  // Reset image error state when user picture URL changes
+  useEffect(() => {
+    setImgError(false);
+  }, [settings?.user_picture]);
 
   // Load settings on mount
   useEffect(() => {
@@ -53,11 +61,22 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
       const res = await fetch(`${API}/settings`);
       const data = await res.json();
       setSettings(data);
-      // Check kaggle reachability whenever settings load
+      setImgError(false);
+      // Check kaggle reachability whenever settings load.
+      // Use a 15s delay on FIRST check to allow the Kaggle backend time to boot
+      // (cloudflared tunnel is ready before uvicorn is fully serving requests)
       if (data.kaggle_connected) {
-        checkKaggle();
+        if (!reachabilityCheckedRef.current) {
+          reachabilityCheckedRef.current = true;
+          // On first load, delay the reachability check by 15s to avoid
+          // falsely showing "expired" when the backend is still starting up
+          setTimeout(() => checkKaggle(), 15000);
+        } else {
+          checkKaggle();
+        }
       } else {
         setKaggleReachable(null);
+        reachabilityCheckedRef.current = false;
       }
     } catch {
       setSettings(null);
@@ -74,10 +93,10 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
     }
   };
 
-  // Re-check reachability every 15s while panel is open and connected
+  // Re-check reachability every 30s while panel is open and connected
   useEffect(() => {
     if (!settings?.kaggle_connected) return;
-    const interval = setInterval(checkKaggle, 15000);
+    const interval = setInterval(checkKaggle, 30000);
     return () => clearInterval(interval);
   }, [settings?.kaggle_connected]);
 
@@ -123,7 +142,7 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
         ref={panelRef}
         className="fixed right-0 top-0 h-full z-50 w-80 flex flex-col overflow-hidden"
         style={{
-          background: "linear-gradient(180deg, #080b18 0%, #06080f 100%)",
+          background: "#000000",
           borderLeft: "1px solid rgba(255,255,255,0.06)",
           boxShadow: "-24px 0 80px rgba(0,0,0,0.6)",
           animation: "slideInRight 0.22s cubic-bezier(0.16,1,0.3,1)",
@@ -139,8 +158,13 @@ export function ProfilePanel({ onClose, onOpenKagglePopup }: ProfilePanelProps) 
         {/* ── Header ────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
           <div className="flex items-center gap-3">
-            {settings?.user_picture ? (
-              <img src={settings.user_picture} alt="Profile" className="w-10 h-10 rounded-xl object-cover border border-white/10" />
+            {settings?.user_picture && !imgError ? (
+              <img 
+                src={settings.user_picture} 
+                alt="Profile" 
+                className="w-10 h-10 rounded-xl object-cover border border-white/10"
+                onError={() => setImgError(true)} 
+              />
             ) : (
               <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-zinc-900 border border-white/10">
                 <User size={18} color="#fff" />

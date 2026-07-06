@@ -10,7 +10,7 @@ import sys
 import base64
 import io
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -18,11 +18,19 @@ import uvicorn
 # Add parent to path
 sys.path.insert(0, os.path.dirname(__file__))
 
+PROJECT_ROOT = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PERSISTENT_DIR = os.path.join(os.getenv('APPDATA'), 'AstroGen') if (getattr(sys, 'frozen', False) and os.name == 'nt' and os.getenv('APPDATA')) else PROJECT_ROOT
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+
+from dotenv import load_dotenv
+load_dotenv(os.path.join(PERSISTENT_DIR, '.env'))
+
 from database import (
     create_session, get_all_sessions, rename_session, delete_session,
     add_message, get_session_messages, get_session_context,
     save_generated_image, get_all_generated_images, image_to_base64,
-    save_user_profile
+    save_user_profile, get_current_user_email, IMG_DIR,
+    record_login, increment_user_use_count, restore_user_data_from_cloud
 )
 from models import (
     generate_image_lora, generate_image_gan, caption_image,
@@ -39,21 +47,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def rewrite_api_requests(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/"):
+        new_path = path[4:]  # strip '/api' -> e.g. '/api/status' becomes '/status'
+        request.scope["path"] = new_path
+        if "raw_path" in request.scope:
+            request.scope["raw_path"] = new_path.encode("ascii")
+    response = await call_next(request)
+    return response
+
 
 from fastapi.staticfiles import StaticFiles
 import threading
 
 # Mount the static directory for generated images
-app.mount("/generated", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "..", "data", "generated")), name="generated")
+app.mount("/generated", StaticFiles(directory=IMG_DIR), name="generated")
 
 @app.on_event("startup")
 def preload_models():
     print("[Models] Preloading pipelines in background thread...")
+    
+    # Reload .env with override=True so persisted AZURE_API_URL (Kaggle tunnel URL)
+    # from a previous session is immediately available in os.environ for models.py
+    try:
+        load_dotenv(os.path.join(PERSISTENT_DIR, '.env'), override=True)
+        azure_url = os.getenv("AZURE_API_URL", "")
+        if azure_url:
+            print(f"[Backend] Restored Kaggle GPU URL from .env: {azure_url}")
+    except Exception as e:
+        print(f"[Backend] Could not reload .env on startup: {e}")
+    
     try:
         from models import _load_lora_pipeline
-        threading.Thread(target=lambda: _load_lora_pipeline() if os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'models', 'lora', 'astrogen_lora.safetensors')) else None, daemon=True).start()
+        threading.Thread(target=lambda: _load_lora_pipeline() if os.path.exists(os.path.join(PROJECT_ROOT, 'models', 'lora', 'astrogen_lora.safetensors')) else None, daemon=True).start()
     except Exception as e:
         print(f"[Models] Preload error: {e}")
+        
+    try:
+        from database import check_and_send_inactivity_reminders
+        threading.Thread(target=check_and_send_inactivity_reminders, daemon=True).start()
+    except Exception as e:
+        print(f"[Backend] Error checking inactivity reminders on startup: {e}")
 
 # ── Pydantic Models ─────────────────────────────────────────────────────────
 
@@ -83,7 +119,8 @@ class CaptionRequest(BaseModel):
 
 # ── Health / Status ─────────────────────────────────────────────────────────
 
-@app.get("/")
+@app.get("/health")
+@app.get("/healthz")
 def root():
     return {"status": "AstroGen API running", "version": "1.0.0"}
 
@@ -92,6 +129,15 @@ def root():
 def status():
     """Returns model availability and system info."""
     model_status = get_model_status()
+    
+    # Increment use count for logged-in user if available
+    try:
+        email = get_current_user_email()
+        if email and email != "guest@astrogen.local":
+            increment_user_use_count(email)
+    except Exception as ex:
+        print(f"[Backend] Error updating usage analytics: {ex}")
+
     return {
         "models": model_status,
         "gemini": is_gemini_available(),
@@ -171,19 +217,22 @@ def generate(req: GenerateRequest):
             img_bytes, req.prompt, req.model, req.session_id
         )
 
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+
         # Save assistant response to chat history
         if req.session_id:
+            data_url = f"data:image/png;base64,{img_b64}"
             add_message(
                 session_id=req.session_id,
                 role='assistant',
-                content=saved['filepath'],
+                content=data_url,
                 msg_type='image',
                 prompt=req.prompt,
                 model_used=req.model
             )
 
-        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
         enriched = enrich_prompt(req.prompt)
+
 
         return {
             "image_b64"   : img_b64,
@@ -208,7 +257,34 @@ def caption(req: CaptionRequest):
     """
     try:
         img_bytes = base64.b64decode(req.image_b64)
-        result    = caption_image(img_bytes, question=req.question)
+        
+        # Save user image & question to history if session_id is provided
+        if req.session_id:
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            filename = f"upload_blip2_{timestamp}.png"
+            filepath = os.path.join(IMG_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(img_bytes)
+                
+            # Add user image message
+            data_url = f"data:image/png;base64,{req.image_b64}"
+            add_message(
+                session_id=req.session_id,
+                role='user',
+                content=data_url,
+                msg_type='image'
+            )
+            # Add user question message if provided
+            if req.question and req.question.strip():
+                add_message(
+                    session_id=req.session_id,
+                    role='user',
+                    content=req.question.strip(),
+                    msg_type='text'
+                )
+
+        result = caption_image(img_bytes, question=req.question)
 
         if req.session_id:
             add_message(
@@ -222,6 +298,8 @@ def caption(req: CaptionRequest):
         return {"caption": result, "model_used": "blip2"}
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -250,13 +328,31 @@ def chat(req: ChatRequest):
         history    = get_session_context(req.session_id, max_messages=8)
         image_bytes= base64.b64decode(req.image_b64) if req.image_b64 else None
 
+        # Save user image to history if provided
+        if image_bytes and req.session_id:
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            filename = f"upload_gemini_{timestamp}.png"
+            filepath = os.path.join(IMG_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(image_bytes)
+                
+            data_url = f"data:image/png;base64,{req.image_b64}"
+            add_message(
+                session_id=req.session_id,
+                role='user',
+                content=data_url,
+                msg_type='image'
+            )
+
         # Save user message to history
-        add_message(
-            session_id=req.session_id,
-            role='user',
-            content=req.message,
-            msg_type='text'
-        )
+        if req.message and req.message.strip():
+            add_message(
+                session_id=req.session_id,
+                role='user',
+                content=req.message.strip(),
+                msg_type='text'
+            )
 
         response = ask_gemini(
             user_message=req.message,
@@ -276,6 +372,8 @@ def chat(req: ChatRequest):
         return {"response": response, "model_used": "gemini"}
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -294,8 +392,8 @@ def gallery(limit: int = 50):
 
 # ── Settings (Gemini key, backend preference) ─────────────────────────────────
 
-_ENV_PATH = os.path.join(os.path.dirname(__file__), '..', '.env')
-_STATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'app_state.json')
+_ENV_PATH = os.path.join(PERSISTENT_DIR, '.env')
+_STATE_PATH = os.path.join(PERSISTENT_DIR, 'data', 'app_state.json')
 
 def _read_env():
     """Read .env file as a dict."""
@@ -399,6 +497,13 @@ def get_settings():
     kaggle_connected = state.get("kaggle_connected", False)
     # When Kaggle is connected, inference runs on the remote GPU regardless of local env
     effective_backend = "cuda" if kaggle_connected else env.get("ASTROGEN_BACKEND", "cpu")
+
+    # Load user profile from .env, database, or app state
+    user_name = env.get("USER_NAME", "") or state.get("user_name", "")
+    user_email = env.get("USER_EMAIL", "") or state.get("user_email", "")
+    user_picture = env.get("USER_PICTURE", "") or state.get("user_picture", "")
+
+
     return {
         "gemini_api_key": key[:8] + "..." + key[-4:] if len(key) > 14 else ("set" if key else ""),
         "gemini_api_key_set": bool(key),
@@ -407,10 +512,11 @@ def get_settings():
         "kaggle_url": state.get("kaggle_url", ""),
         "launch_count": state.get("launch_count", 0),
         "kaggle_username": env.get("KAGGLE_USERNAME", ""),
+        "kaggle_key": env.get("KAGGLE_KEY", ""),  # Return actual Kaggle key for local app pre-fill
         "kaggle_key_set": bool(env.get("KAGGLE_KEY", "")),
-        "user_name": state.get("user_name", ""),
-        "user_email": state.get("user_email", ""),
-        "user_picture": state.get("user_picture", ""),
+        "user_name": user_name,
+        "user_email": user_email,
+        "user_picture": user_picture,
     }
 
 
@@ -430,7 +536,7 @@ def auth_google():
 
 
 @app.get("/auth/callback")
-def auth_callback(code: str):
+def auth_callback(code: str, request: Request):
     """Handle callback from Google and retrieve user credentials."""
     client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
@@ -470,8 +576,25 @@ def auth_callback(code: str):
         state["user_picture"] = user_picture
         _write_state(state)
         
-        # Save profile to Supabase PostgreSQL database if configured
+        # Write to .env for local persistence
+        _write_env({
+            "USER_NAME": user_name,
+            "USER_EMAIL": user_email,
+            "USER_PICTURE": user_picture
+        })
+
+        # Save profile to local SQLite or remote Supabase PostgreSQL database
         save_user_profile(user_email, user_name, user_picture, opt_in=True)
+        
+        # Restore user data (sessions, messages, images) from Supabase
+        try:
+            restore_user_data_from_cloud(user_email)
+        except Exception as re_err:
+            print(f"[Backend] Error restoring user data from Supabase: {re_err}")
+        
+        # Record login event with IP address
+        client_ip = request.client.host if request.client else "unknown"
+        record_login(user_email, client_ip)
         
         # Send transactional welcome email
         send_onboarding_email(user_email, user_name)
@@ -484,7 +607,7 @@ def auth_callback(code: str):
                 <div style="font-size: 48px; color: #10b981; margin-bottom: 20px;">✓</div>
                 <h2 style="margin-bottom: 10px; font-weight: 700; letter-spacing: 1px;">Signed In Successfully</h2>
                 <p style="color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 30px;">
-                    Welcome to AstroGen Space Studio. You may now close this browser tab and return to the application.
+                     Welcome to AstroGen Space Studio. You may now close this browser tab and return to the application.
                 </p>
                 <div style="font-size: 11px; color: #475569;">ASTROGEN SPACE STUDIO</div>
             </div>
@@ -501,12 +624,42 @@ def auth_callback(code: str):
 
 @app.post("/auth/logout")
 def auth_logout():
-    """Log user out by clearing user fields in app state."""
+    """Log user out by clearing user fields, credentials, and local database cache."""
+    # 1. Clear app_state
     state = _read_state()
     state.pop("user_name", None)
     state.pop("user_email", None)
     state.pop("user_picture", None)
+    state.pop("kaggle_url", None)
+    state["kaggle_connected"] = False
     _write_state(state)
+
+    # 2. Clear sensitive env credentials
+    _write_env({
+        "USER_NAME": "",
+        "USER_EMAIL": "",
+        "USER_PICTURE": "",
+        "GEMINI_API_KEY": "",
+        "KAGGLE_USERNAME": "",
+        "KAGGLE_KEY": "",
+        "AZURE_API_URL": ""
+    })
+    
+    # 3. Wipe the in-memory database and disk encrypted backup
+    try:
+        import sqlite3
+        import backend.database as db
+        db._mem_keep_alive.close()
+        # Re-open fresh in-memory database to re-initialize tables
+        db._mem_keep_alive = sqlite3.connect("file:astrogen_mem?mode=memory&cache=shared", uri=True, check_same_thread=False)
+        db.init_db()
+        
+        if os.path.exists(db.ENC_DB_PATH):
+            os.remove(db.ENC_DB_PATH)
+        print("[Auth] Cleaned up local database and cache on logout.")
+    except Exception as e:
+        print(f"[Auth] Error deleting database on logout: {e}")
+
     return {"ok": True}
 
 
@@ -579,6 +732,9 @@ def poll_kaggle(token: str, username: Optional[str] = None, key: Optional[str] =
     if url:
         # Auto-connect and save it!
         _write_env({"AZURE_API_URL": url})
+        os.environ["AZURE_API_URL"] = url
+        # Reload .env with override=True so all modules (incl. models.py) pick up the new URL
+        load_dotenv(os.path.join(PERSISTENT_DIR, '.env'), override=True)
         state = _read_state()
         state["kaggle_url"] = url
         state["kaggle_connected"] = True
@@ -618,7 +774,7 @@ def kaggle_status():
     for endpoint in ["/status", "/health"]:
         try:
             import requests as _req
-            resp = _req.get(f"{url.rstrip('/')}{endpoint}", timeout=8)
+            resp = _req.get(f"{url.rstrip('/')}{endpoint}", timeout=8, verify=False)
             if resp.status_code == 200:
                 reachable = True
                 break
@@ -637,17 +793,13 @@ def set_kaggle_url(req: KaggleUrlRequest):
 
     # Save to both .env (for models.py) and app_state.json
     _write_env({"AZURE_API_URL": url})
+    os.environ["AZURE_API_URL"] = url
+    # Reload .env with override=True so models.py picks up the new tunnel URL immediately
+    load_dotenv(os.path.join(PERSISTENT_DIR, '.env'), override=True)
     state = _read_state()
     state["kaggle_url"] = url
     state["kaggle_connected"] = True
     _write_state(state)
-
-    # Reload env in models module
-    try:
-        import importlib, backend.models as _models
-        importlib.reload(_models)
-    except Exception:
-        pass
 
     return {"ok": True, "url": url}
 
@@ -655,12 +807,53 @@ def set_kaggle_url(req: KaggleUrlRequest):
 @app.delete("/kaggle/url")
 def clear_kaggle_url():
     """Disconnect Kaggle GPU — revert to local CPU."""
+    env = _read_env()
+    username = env.get("KAGGLE_USERNAME", "")
+    key = env.get("KAGGLE_KEY", "")
+    if username and key:
+        try:
+            from backend.kaggle_launch import stop_kaggle_server
+            stop_kaggle_server(username, key)
+        except Exception as e:
+            print(f"[Backend] Error calling stop_kaggle_server: {e}")
+
     _write_env({"AZURE_API_URL": ""})
+    os.environ.pop("AZURE_API_URL", None)
     state = _read_state()
     state["kaggle_url"] = ""
     state["kaggle_connected"] = False
     _write_state(state)
     return {"ok": True, "message": "Kaggle GPU disconnected. Using local CPU."}
+
+
+# ── Static Files and SPA Routing Fallback ────────────────────────────────────
+from fastapi.responses import FileResponse, JSONResponse
+
+dist_dir = os.path.join(os.path.dirname(__file__), "..", "frontend", "artifacts", "astrogen", "dist", "public")
+frozen_dist_dir = os.path.join(os.path.dirname(__file__), "dist")
+
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    path = request.url.path
+    if path.startswith("/api") or path.startswith("/sessions") or path.startswith("/settings") or path.startswith("/status") or path.startswith("/kaggle"):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    # Check regular static path index.html fallback
+    index_file = os.path.join(dist_dir, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    if os.path.exists(frozen_dist_dir):
+        frozen_index = os.path.join(frozen_dist_dir, "index.html")
+        if os.path.exists(frozen_index):
+            return FileResponse(frozen_index)
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+# Serve static frontend files if present (frozen production build or dev build)
+if os.path.exists(dist_dir):
+    print(f"[Backend] Serving compiled static frontend from: {dist_dir}")
+    app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
+elif os.path.exists(frozen_dist_dir):
+    print(f"[Backend] Serving frozen compiled static frontend from: {frozen_dist_dir}")
+    app.mount("/", StaticFiles(directory=frozen_dist_dir, html=True), name="static")
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
@@ -671,5 +864,6 @@ if __name__ == "__main__":
     print("  API: http://localhost:8001")
     print("  Docs: http://localhost:8001/docs")
     print("=" * 55)
-    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+    host = "0.0.0.0" if os.path.exists("/kaggle") else "127.0.0.1"
+    uvicorn.run(app, host=host, port=8001, log_level="info")
 

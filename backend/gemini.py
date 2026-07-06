@@ -8,9 +8,13 @@ Free Gemini API integration for:
 
 import os
 import base64
+import sys
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+PROJECT_ROOT = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PERSISTENT_DIR = os.path.join(os.getenv('APPDATA'), 'AstroGen') if (getattr(sys, 'frozen', False) and os.name == 'nt' and os.getenv('APPDATA')) else PROJECT_ROOT
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+load_dotenv(os.path.join(PERSISTENT_DIR, '.env'))
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 

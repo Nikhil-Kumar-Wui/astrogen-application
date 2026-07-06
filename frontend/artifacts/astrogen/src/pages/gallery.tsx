@@ -18,7 +18,7 @@ function PlanetLogo({ className = "w-5 h-5" }: { className?: string }) {
 }
 
 export default function GalleryPage() {
-  const { data: images = [], isLoading } = useGetGallery({ params: { limit: 100 } });
+  const { data: images = [], isLoading } = useGetGallery({ limit: 100 });
   const [fullscreenImage, setFullscreenImage] = useState<{ url: string; prompt?: string; model?: string } | null>(null);
 
   const downloadImage = async (path: string, e: React.MouseEvent) => {
@@ -109,7 +109,7 @@ export default function GalleryPage() {
                 <div
                   key={img.id}
                   className="break-inside-avoid relative group rounded-xl overflow-hidden border border-white/[0.06] bg-white/[0.03] cursor-pointer hover:border-white/[0.12] transition-colors duration-300"
-                  onClick={() => setFullscreenImage({ url: imageUrl(img.filepath) || "", prompt: img.prompt, model: img.model })}
+                  onClick={() => setFullscreenImage({ url: imageUrl(img.filepath) || "", prompt: img.prompt || undefined, model: img.model || undefined })}
                 >
                   <img
                     src={imageUrl(img.filepath) || ""}

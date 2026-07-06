@@ -9,8 +9,13 @@ ML packages (torch, diffusers) are optional — backend starts without them.
 """
 
 import os
+import sys
+PROJECT_ROOT = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PERSISTENT_DIR = os.path.join(os.getenv('APPDATA'), 'AstroGen') if (getattr(sys, 'frozen', False) and os.name == 'nt' and os.getenv('APPDATA')) else PROJECT_ROOT
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+load_dotenv(os.path.join(PERSISTENT_DIR, '.env'))
 
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
@@ -96,13 +101,27 @@ except Exception as e:
     print(f"[Models] Could not initialize DoH adapter: {e}")
 
 # ── Paths ───────────────────────────────────────────────────────────────────
-APP_DIR    = os.path.dirname(os.path.dirname(__file__))
-MODELS_DIR = os.path.join(APP_DIR, 'models')
+import sys
+
+def _get_models_dir():
+    if os.name == 'nt':
+        appdata = os.getenv('APPDATA')
+        if appdata:
+            path = os.path.join(appdata, 'AstroGen', 'models')
+            if os.path.exists(path):
+                return path
+    return os.path.join(PROJECT_ROOT, 'models')
+
+MODELS_DIR = _get_models_dir()
 
 LORA_WEIGHTS_PATH  = os.path.join(MODELS_DIR, 'lora', 'astrogen_lora.safetensors')
 GAN_ENC_PATH       = os.path.join(MODELS_DIR, 'vae_gan', 'encoder.pt')
 GAN_GEN_PATH       = os.path.join(MODELS_DIR, 'vae_gan', 'generator.pt')
-BLIP2_PATH         = os.path.join(MODELS_DIR, 'blip2', 'blip2_finetuned')
+
+# Fallback to finetuned if merged is not available
+BLIP2_PATH = os.path.join(MODELS_DIR, 'blip2', 'blip2_merged')
+if not os.path.exists(BLIP2_PATH):
+    BLIP2_PATH = os.path.join(MODELS_DIR, 'blip2', 'blip2_finetuned')
 
 SD_BASE_MODEL      = 'runwayml/stable-diffusion-v1-5'
 BLIP2_BASE_MODEL   = 'Salesforce/blip2-opt-2.7b'
@@ -123,6 +142,32 @@ def get_optimal_device():
 
 DEVICE = get_optimal_device()
 print(f"[Models] Active Device: {DEVICE}")
+
+def _get_azure_url() -> str:
+    """Read AZURE_API_URL (Kaggle tunnel URL) from both .env file and os.environ.
+    
+    Always reads fresh from .env file to pick up URLs set after process start,
+    e.g. when the user connects Kaggle GPU while the app is already running.
+    """
+    # First try os.environ (may have been set directly by main.py endpoint)
+    url_env = os.environ.get("AZURE_API_URL", "").strip().strip("'\"")
+    
+    # Also read from .env file directly (freshest value, survives restarts)
+    url_file = ""
+    try:
+        env_path = os.path.join(PERSISTENT_DIR, '.env')
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('AZURE_API_URL='):
+                        url_file = line.split('=', 1)[1].strip().strip("'\"")
+                        break
+    except Exception:
+        pass
+    
+    # File value wins (most up-to-date), fallback to env
+    return url_file or url_env
 
 # ── No DirectML / XPU patches needed (NVIDIA CUDA + CPU only) ─────────────
 
@@ -213,16 +258,10 @@ def _load_lora_pipeline():
             merged_path, torch_dtype=dtype, safety_checker=None
         )
     else:
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            SD_BASE_MODEL, torch_dtype=dtype, safety_checker=None
+        raise FileNotFoundError(
+            f"[Models] ERROR: Custom merged model not found at: {merged_path}. "
+            "Please ensure your dataset is properly mounted and contains the 'astrogen_merged' directory."
         )
-        if os.path.exists(LORA_WEIGHTS_PATH):
-            print(f"[Models] Loading LoRA weights: {LORA_WEIGHTS_PATH}")
-            lora_state = load_file(LORA_WEIGHTS_PATH)
-            pipeline.unet.load_state_dict(lora_state, strict=False)
-            print("[Models] LoRA weights loaded ✓")
-        else:
-            print("[Models] LoRA weights not found - using base SD 1.5")
 
     pipeline.to(DEVICE)
     pipeline.enable_attention_slicing()
@@ -245,46 +284,38 @@ def generate_image_lora(
     Returns PNG bytes.
     """
     # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
-    # On Kaggle: ASTROGEN_BACKEND=cuda → skip these and use local fine-tuned model directly.
-    # On desktop CPU: ASTROGEN_BACKEND=cpu → delegate to Kaggle GPU tunnel or HF API.
-    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
-    _is_gpu_server = (_backend == "cuda")
-
-    if not _is_gpu_server:
-        # Check for Kaggle tunnel URL → forward request to remote GPU
-        azure_url = os.getenv("AZURE_API_URL")
-        if azure_url:
-            azure_url = azure_url.strip("'\"")
-            print(f"[Models] AZURE_API_URL detected. Delegating generation to remote GPU: {azure_url}...")
-            try:
-                import requests
-                api_url = f"{azure_url.rstrip('/')}/generate"
-                payload = {
-                    "prompt": prompt,
-                    "model": "lora_sd",
-                    "session_id": None,
-                    "num_steps": num_steps,
-                    "guidance_scale": guidance_scale,
-                    "width": width,
-                    "height": height,
-                    "seed": seed
-                }
-                response = requests.post(api_url, json=payload, timeout=120)
-                if response.status_code == 200:
-                    data = response.json()
-                    img_b64 = data.get("image_b64")
-                    if img_b64:
-                        print("[Models] Successfully generated image via remote GPU!")
-                        import base64
-                        return base64.b64decode(img_b64)
-                    else:
-                        print(f"[Models] Remote GPU response missing image_b64: {data}")
-                else:
-                    print(f"[Models] Remote GPU returned status {response.status_code}: {response.text}")
-                    print("[Models] Falling back to local generation...")
-            except Exception as e:
-                print(f"[Models] Error calling remote GPU: {e}")
-                print("[Models] Falling back to local generation...")
+    azure_url = _get_azure_url()
+    if azure_url:
+        print(f"[Models] AZURE_API_URL detected. Delegating generation to remote GPU: {azure_url}...")
+        import requests
+        api_url = f"{azure_url.rstrip('/')}/generate"
+        payload = {
+            "prompt": prompt,
+            "model": "lora_sd",
+            "session_id": None,
+            "num_steps": num_steps,
+            "guidance_scale": guidance_scale,
+            "width": width,
+            "height": height,
+            "seed": seed
+        }
+        try:
+            response = requests.post(api_url, json=payload, timeout=300, verify=False)
+        except Exception as e:
+            raise RuntimeError(f"[Models] Could not reach remote GPU at {azure_url}: {e}")
+        if response.status_code == 200:
+            data = response.json()
+            img_b64 = data.get("image_b64")
+            if img_b64:
+                print("[Models] Successfully generated image via remote GPU!")
+                import base64
+                return base64.b64decode(img_b64)
+            else:
+                raise RuntimeError(f"[Models] Remote GPU response missing image_b64: {data}")
+        else:
+            raise RuntimeError(
+                f"[Models] Remote GPU error (HTTP {response.status_code}): {response.text[:500]}"
+            )
 
 
     pipeline = _load_lora_pipeline()
@@ -380,9 +411,12 @@ def _load_gan_decoder():
         state = torch.load(GAN_GEN_PATH, map_location=DEVICE)
         decoder.load_state_dict(state, strict=False)
         decoder.eval()
-        print("[Models] VAE-GAN decoder loaded \u2713")
+        print("[Models] VAE-GAN decoder loaded successfully")
     else:
-        print("[Models] GAN weights not found - random noise output")
+        raise FileNotFoundError(
+            f"[Models] ERROR: VAE-GAN weights not found at: {GAN_GEN_PATH}. "
+            "Please ensure your dataset is properly mounted and contains the 'vae_gan' directory."
+        )
 
     _gan_decoder = decoder
     return decoder
@@ -394,39 +428,34 @@ def generate_image_gan(seed: int = None) -> bytes:
     Returns PNG bytes.
     """
     # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
-    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
-    _is_gpu_server = (_backend == "cuda")
-
-    if not _is_gpu_server:
-        azure_url = os.getenv("AZURE_API_URL")
-        if azure_url:
-            azure_url = azure_url.strip("'\"")
-            print(f"[Models] AZURE_API_URL detected. Delegating GAN generation to remote GPU: {azure_url}...")
-            try:
-                import requests
-                api_url = f"{azure_url.rstrip('/')}/generate"
-                payload = {
-                    "prompt": "",
-                    "model": "vae_gan",
-                    "session_id": None,
-                    "seed": seed
-                }
-                response = requests.post(api_url, json=payload, timeout=120)
-                if response.status_code == 200:
-                    data = response.json()
-                    img_b64 = data.get("image_b64")
-                    if img_b64:
-                        print("[Models] Successfully generated GAN image via remote GPU!")
-                        import base64
-                        return base64.b64decode(img_b64)
-                    else:
-                        print(f"[Models] Remote GAN response missing image_b64: {data}")
-                else:
-                    print(f"[Models] Remote GAN returned status {response.status_code}: {response.text}")
-                    print("[Models] Falling back to local GAN...")
-            except Exception as e:
-                print(f"[Models] Error calling remote GPU for GAN: {e}")
-                print("[Models] Falling back to local GAN...")
+    azure_url = _get_azure_url()
+    if azure_url:
+        print(f"[Models] AZURE_API_URL detected. Delegating GAN generation to remote GPU: {azure_url}...")
+        import requests
+        api_url = f"{azure_url.rstrip('/')}/generate"
+        payload = {
+            "prompt": "",
+            "model": "vae_gan",
+            "session_id": None,
+            "seed": seed
+        }
+        try:
+            response = requests.post(api_url, json=payload, timeout=300, verify=False)
+        except Exception as e:
+            raise RuntimeError(f"[Models] Could not reach remote GPU at {azure_url}: {e}")
+        if response.status_code == 200:
+            data = response.json()
+            img_b64 = data.get("image_b64")
+            if img_b64:
+                print("[Models] Successfully generated GAN image via remote GPU!")
+                import base64
+                return base64.b64decode(img_b64)
+            else:
+                raise RuntimeError(f"[Models] Remote GAN response missing image_b64: {data}")
+        else:
+            raise RuntimeError(
+                f"[Models] Remote GPU error (HTTP {response.status_code}): {response.text[:500]}"
+            )
 
     decoder = _load_gan_decoder()
 
@@ -483,7 +512,15 @@ def _load_blip2():
     # Always load processor from base model (adapter folder may not have it)
     processor_path = BLIP2_PATH if os.path.exists(os.path.join(BLIP2_PATH, 'preprocessor_config.json')) else BLIP2_BASE_MODEL
     print(f"[Models] Loading processor from: {processor_path}")
-    processor = Blip2Processor.from_pretrained(processor_path)
+    try:
+        processor = Blip2Processor.from_pretrained(processor_path)
+    except Exception as e:
+        print(f"[Models] Direct processor load failed ({e}). Loading manually with slow tokenizer fallback...")
+        from transformers import AutoTokenizer, BlipImageProcessor
+        tok_path = BLIP2_PATH if os.path.exists(os.path.join(BLIP2_PATH, 'tokenizer_config.json')) else BLIP2_BASE_MODEL
+        tokenizer = AutoTokenizer.from_pretrained(tok_path, use_fast=False)
+        image_processor = BlipImageProcessor.from_pretrained(processor_path)
+        processor = Blip2Processor(image_processor=image_processor, tokenizer=tokenizer)
 
     # ── Load base model + apply LoRA adapter ─────────────────────────────────
     adapter_config = os.path.join(BLIP2_PATH, 'adapter_config.json')
@@ -499,32 +536,31 @@ def _load_blip2():
         try:
             from peft import PeftModel
             model = PeftModel.from_pretrained(base_model, BLIP2_PATH)
-            print("[Models] LoRA adapter applied via PeftModel ✓")
+            print("[Models] LoRA adapter applied via PeftModel [OK]")
         except Exception as e:
-            print(f"[Models] PeftModel load failed ({e}). Using base model only.")
-            model = base_model
+            raise RuntimeError(f"[Models] ERROR: Failed to apply PeftModel LoRA adapter: {e}")
     elif os.path.exists(BLIP2_PATH) and os.path.isdir(BLIP2_PATH):
         # May be a full saved model (not PEFT format) — try loading directly
         print(f"[Models] Loading full model from: {BLIP2_PATH}")
-        model = Blip2ForConditionalGeneration.from_pretrained(
-            BLIP2_PATH,
-            torch_dtype=dtype,
-            device_map='auto' if DEVICE == 'cuda' else None,
-        )
+        try:
+            model = Blip2ForConditionalGeneration.from_pretrained(
+                BLIP2_PATH,
+                torch_dtype=dtype,
+                device_map='auto' if DEVICE == 'cuda' else None,
+            )
+        except Exception as e:
+            raise RuntimeError(f"[Models] ERROR: Failed to load full BLIP2 model from {BLIP2_PATH}: {e}")
     else:
-        # No local weights — use base model
-        print(f"[Models] No local BLIP2 weights found. Loading base: {BLIP2_BASE_MODEL}")
-        model = Blip2ForConditionalGeneration.from_pretrained(
-            BLIP2_BASE_MODEL,
-            torch_dtype=dtype,
-            device_map='auto' if DEVICE == 'cuda' else None,
+        raise FileNotFoundError(
+            f"[Models] ERROR: BLIP2 weights/adapter not found at: {BLIP2_PATH}. "
+            "Please ensure your dataset is properly mounted and contains the 'blip2' directory."
         )
 
     if DEVICE == 'cpu' and not hasattr(model, 'hf_device_map'):
         model = model.to(DEVICE)
 
     model.eval()
-    print("[Models] BLIP2 loaded and ready ✓")
+    print("[Models] BLIP2 loaded and ready [OK]")
 
     _blip2_model     = model
     _blip2_processor = processor
@@ -540,39 +576,35 @@ def caption_image(img_bytes: bytes, question: str = None) -> str:
     Returns: Generated text
     """
     # ── Cloud delegation (only when running locally, not on the GPU server itself) ──
-    _backend = os.getenv("ASTROGEN_BACKEND", "cpu").strip().lower()
-    _is_gpu_server = (_backend == "cuda")
-
-    if not _is_gpu_server:
-        azure_url = os.getenv("AZURE_API_URL")
-        if azure_url:
-            azure_url = azure_url.strip("'\"")
-            print(f"[Models] AZURE_API_URL detected. Delegating captioning to remote GPU: {azure_url}...")
-            try:
-                import requests
-                import base64
-                api_url = f"{azure_url.rstrip('/')}/caption"
-                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
-                payload = {
-                    "image_b64": img_b64,
-                    "question": question,
-                    "session_id": None
-                }
-                response = requests.post(api_url, json=payload, timeout=120)
-                if response.status_code == 200:
-                    data = response.json()
-                    caption = data.get("caption")
-                    if caption:
-                        print("[Models] Successfully captioned image via remote GPU!")
-                        return caption
-                    else:
-                        print(f"[Models] Remote captioning response missing caption: {data}")
+    azure_url = _get_azure_url()
+    if azure_url and azure_url.strip():
+        azure_url = azure_url.strip("'\"")
+        print(f"[Models] AZURE_API_URL detected. Delegating captioning to remote GPU: {azure_url}...")
+        try:
+            import requests
+            import base64
+            api_url = f"{azure_url.rstrip('/')}/caption"
+            img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+            payload = {
+                "image_b64": img_b64,
+                "question": question,
+                "session_id": None
+            }
+            response = requests.post(api_url, json=payload, timeout=120, verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                caption = data.get("caption")
+                if caption:
+                    print("[Models] Successfully captioned image via remote GPU!")
+                    return caption
                 else:
-                    print(f"[Models] Remote captioning returned status {response.status_code}: {response.text}")
-                    print("[Models] Falling back to local captioning...")
-            except Exception as e:
-                print(f"[Models] Error calling remote GPU for captioning: {e}")
+                    print(f"[Models] Remote captioning response missing caption: {data}")
+            else:
+                print(f"[Models] Remote captioning returned status {response.status_code}: {response.text}")
                 print("[Models] Falling back to local captioning...")
+        except Exception as e:
+            print(f"[Models] Error calling remote GPU for captioning: {e}")
+            print("[Models] Falling back to local captioning...")
 
     model, processor = _load_blip2()
     img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
@@ -585,7 +617,25 @@ def caption_image(img_bytes: bytes, question: str = None) -> str:
         inputs = processor(images=img, return_tensors='pt').to(DEVICE, dtype=dtype)
 
     with torch.no_grad():
-        generated_ids = model.generate(**inputs, max_new_tokens=200)
+        # Bypass PEFT wrapper's generate function on multimodal inputs to avoid single-token truncation
+        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+            generated_ids = model.base_model.model.generate(
+                **inputs,
+                max_new_tokens=150,
+                num_beams=5,
+                repetition_penalty=1.3,
+                length_penalty=1.0,
+                early_stopping=True
+            )
+        else:
+            generated_ids = model.generate(
+                **inputs,
+                max_new_tokens=150,
+                num_beams=5,
+                repetition_penalty=1.3,
+                length_penalty=1.0,
+                early_stopping=True
+            )
 
     caption = processor.decode(generated_ids[0], skip_special_tokens=True).strip()
     return caption
